@@ -10,4 +10,4 @@
 * onvert the second part of Readme.md
 * Convert the predeveloped part into this project.
 * Analyse the state of the project with this predeveloped things.
-* After this, we can progress with development.
+* After this, we can progress with development. git
