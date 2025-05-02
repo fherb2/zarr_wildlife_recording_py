@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$USER_HOME$/dev/dnnsep/.idea/dnnsep.iml" filepath="$USER_HOME$/dev/dnnsep/.idea/dnnsep.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../dsd100mat/.idea/dsd100mat.iml" filepath="$PROJECT_DIR$/../dsd100mat/.idea/dsd100mat.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../dsd100py/.idea/dsd100py.iml" filepath="$PROJECT_DIR$/../dsd100py/.idea/dsd100py.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../dynamics/.idea/dynamics.iml" filepath="$PROJECT_DIR$/../dynamics/.idea/dynamics.iml" />
+      <module fileurl="file://$USER_HOME$/dev/gmmsketch/.idea/gmmsketch.iml" filepath="$USER_HOME$/dev/gmmsketch/.idea/gmmsketch.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../pub_2016_icassp/.idea/pub_2016_icassp.iml" filepath="$PROJECT_DIR$/../pub_2016_icassp/.idea/pub_2016_icassp.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../pyCFM/.idea/pyCFM.iml" filepath="$PROJECT_DIR$/../pyCFM/.idea/pyCFM.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/pyPROJET.iml" filepath="$PROJECT_DIR$/.idea/pyPROJET.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../quantile_deflation/.idea/quantile_deflation.iml" filepath="$PROJECT_DIR$/../quantile_deflation/.idea/quantile_deflation.iml" />
+      <module fileurl="file://$USER_HOME$/dev/webKAM/.idea/webKAM.iml" filepath="$USER_HOME$/dev/webKAM/.idea/webKAM.iml" />
+    </modules>
+  </component>
+</project>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="PYTHON_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$" />
+    <orderEntry type="jdk" jdkName="Python 2.7.6 (/usr/bin/python2.7)" jdkType="Python SDK" />
+    <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="module" module-name="webKAM" />
+    <orderEntry type="module" module-name="webKAM" />
+    <orderEntry type="module" module-name="webKAM" />
+    <orderEntry type="module" module-name="quantile_deflation" />
+    <orderEntry type="module" module-name="dynamics" />
+    <orderEntry type="module" module-name="dsd100py" />
+    <orderEntry type="module" module-name="webKAM" />
+    <orderEntry type="module" module-name="dnnsep" />
+    <orderEntry type="module" module-name="dsd100mat" />
+    <orderEntry type="module" module-name="pyCFM" />
+    <orderEntry type="module" module-name="pub_2016_icassp" />
+    <orderEntry type="module" module-name="gmmsketch" />
+  </component>
+</module>

@@ -1,0 +1,18 @@
+[setup-dev-tooling]
+poetry-version = "1.8.2"
+
+[tool.poetry]
+name = "zarrwlr"
+version = "0.1.0"
+description = "Python module/library for summarizing environmental sounds (or/and images) and metadata for scientific analysis by using Zarr databases."
+authors = ["fherb2 <herbrand@gmx.de>"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "zarrwlr", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

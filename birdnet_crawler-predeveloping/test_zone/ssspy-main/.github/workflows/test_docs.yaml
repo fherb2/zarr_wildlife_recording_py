@@ -1,0 +1,30 @@
+name: tests for docs
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install pandoc
+          python -m pip install --upgrade pip
+          pip install ".[docs,notebooks]"
+      - name: Build docs
+        run: |
+          . ./docs/pre_build.sh
+          cd docs/
+          sphinx-build -W ./ ./_build/html/

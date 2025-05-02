@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="" />
+    <mapping directory="$PROJECT_DIR$/../dsd100mat" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../dsd100py" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../pub_2016_icassp" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../pyCFM" vcs="Git" />
+  </component>
+</project>
