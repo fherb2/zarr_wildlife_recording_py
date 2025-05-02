@@ -1,10 +1,16 @@
-# wildlifeRecords2Hdf (Python module)
+# ZarrWildlifeRecording Library for Python
 
-**Python module for summarizing environmental sounds (or/and images) and metadata for scientific analysis by using HDF5 databases.**
+**Python module for summarizing environmental sounds (or/and images) and metadata for scientific analysis by using Zarr databases.**
 
 > **Framework with methods for organising mass source data, in particular environmental sound recordings or wildlife camera images, including other recorded data that is directly related to this mass source data, in such a way that the data can be easily accessed at any later point in time. The magic words are "self-describing database".**
 
-**If you are thinking about how you or your workgroup should store a large amount of sound or/and image data for subsequent analysis,** **then this module could be the answer.** **The module also provides methods to work with these data directly with the [opensoundscape](https://opensoundscape.org) module for analysis. And it includes importing methodes.**
+**If you are thinking about how you or your workgroup should store a large amount of sound or/and image data for subsequent analysis,** **then this module could be the answer.** **The module also provides methods to work with these data directly with the [opensoundscape](https://opensoundscape.org) module for analysis. Connectivity to [Arbimon](https://arbimon.org) is planned, processing with [birdnetlib](https://github.com/joeweiss/birdnetlib) and, of course, it includes different importing methodes from sound devices like [Audiomoth](https://www.openacousticdevices.info/audiomoth) as WAV or any other systems.**
+
+## Zarr instead HDF5
+
+The first steps in developing this library were taken based on the properties that HDF5 databases offer for measurement data ([wildlifeRecords2Hdf](https://github.com/fherb2/wildlifeRecords2Hdf)). They allow metadata to be assigned, provide good structuring and enable fast access even with large amounts of data.
+The decisive and, as yet, not fully revised limitation of HDF5 is the poor implementation of access by competing processes. Especially if the database is also intended to be suitable for distributed computing in HPC clusters, HDF5 proved to be inadequate at the start of development of this library.
+For this reason, a library based on Zarr is now being created. The development progress made so far will thus be converted from HDF5 to Zarr.
 
 ## Typical use cases for which this Python module will be made
 
@@ -76,32 +82,33 @@ What type of data is the system optimised for?
 
 Another optimisation is that access to the data can be indexed in data sets, so that it is not necessary to load a data set completely into the main memory in order to work with it. Furthermore, file access is optimised to such an extent that it is clearly superior in terms of performance to the above-described variant of storing the data in individual files in a file folder structure.
 
-However, HDF has a significant disadvantage compared to relational databases: it is not designed to process write operations from parallel processes! It is hardly useful as a database for reading AND writing data with high performance. The design of HDF essentially meets the requirements of our application for storing extensive source data and metadata. Using the same HDF5 database file to store the results of the recognition process is possible, but not performance-optimised. Unlike SQL databases, HDF5 does not have an engine that receives and cleverly sorts data queries and write requests. **HDF is designed to combine (scientific) mass and source data with all its meta information and to standardise access to it.**
+However, HDF has a significant disadvantage compared to relational databases: it is not designed to process write operations from parallel processes! It is hardly useful as a database for reading AND writing data with high performance.  **HDF is designed to combine (scientific) mass and >*source<* data with all its meta information and to standardise access to it. But it is not designed to be a performant database during data processing.**
 
-So in the end, it is designed to store our wildlife data together with all meta information in a structured and ‘easy to read’ way. If the analysis of the data from the HDF5 file produces relatively little data, or data that is well compressed in terms of content, it is of course no problem to store these results in the same HDF5 file. However, we are only considering the case of summarising the source data well structured and with metadata in an HDF5 file. With the following objectives:
+### Zarr database system
 
-* data that belongs together is also stored together in a file
-* the fact that the data belongs together is self-evident from the structure and any ‘descriptive’ metadata that may have been added.
-* chunkwise access, even across data that was originally recorded in separate files
-* metadata describes the data (e.g. which physical unit is to be used or which conversion into a physical unit is necessary; e.g. with which device combination and at which location the data was generated; how the individual data series can be historically aligned, etc.)
-* the associated framework (developed and published here) provides standardisation of the data
+The designers of this database system were greatly inspired by HDF5: its structure, efficient array access, assignment of metadata to data arrays, which are mostly scientific measurement data... Everything that makes HDF5 so special should also be possible in Zarr, but a new, enhanced design should eliminate the disadvantage of competing access in HDF5 and also expand the methods for working in cloud solutions and distributed computing.
 
-The goals show that reusability with the help of the HDF5 format and the framework published here is only possible if the framework itself is accepted and used as a de facto standard by many working groups. Without this effect, the good self-description of the data in the HDF5 files remains. However, each new data set also requires the development of new access methods.
+**This is the reason, why this new library/module should work with >>Zarr<< instead of HDF5.**
 
-> **The main purpose of this project is therefore to establish the access methods as an API as a quasi-standard.**
+---
 
-> **Accordingly, the project is open to contributors for continuous development and improvement.**
 
-### Explore any HDF5 files
 
-There are a number of tools for opening and exploring any HDF5 file. Generally speaking, there is no problem in recognising the structure and details of data sets and metadata in order to create suitable evaluation scripts. That said, exploring a previously unknown HDF5 file and writing suitable evaluation scripts from it is a straightforward process with a low barrier to entry.
+# >>FOLLOWING PART OF README IS COPIED FROM HDF5 APPROACH AND MUST BE CONVERTED TO THE ZARR APPROACH<<
+
+---
+
+
 
 # Module Documentation
 
 [Development process and documentation are in progress. – **Not yet ready tu use!**]
 
-## HDF5 file structure and documentation of groups, datasets and attributes
+## Zarr database structure and documentation of groups, datasets and attributes
 
+---
+TODO: Adapt following description 1:1 to Zarr.
+---
 ### Structure (over all)
 
 ```
