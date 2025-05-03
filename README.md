@@ -92,13 +92,9 @@ The designers of this database system were greatly inspired by HDF5: its structu
 
 ---
 
-
-
 # >>FOLLOWING PART OF README IS COPIED FROM HDF5 APPROACH AND MUST BE CONVERTED TO THE ZARR APPROACH<<
 
 ---
-
-
 
 # Module Documentation
 
@@ -107,8 +103,10 @@ The designers of this database system were greatly inspired by HDF5: its structu
 ## Zarr database structure and documentation of groups, datasets and attributes
 
 ---
+
 TODO: Adapt following description 1:1 to Zarr.
----
+----------------------------------------------
+
 ### Structure (over all)
 
 ```
