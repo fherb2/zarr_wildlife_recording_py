@@ -12,6 +12,8 @@ packages = [{ include = "zarrwlr", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+mutagen = "^1.47.0"
+rich = "^14.0.0"
 
 [build-system]
 requires = ["poetry-core"]
