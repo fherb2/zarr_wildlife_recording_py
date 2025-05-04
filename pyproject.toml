@@ -10,10 +10,14 @@ license = "MIT"
 readme = "README.md"
 packages = [{ include = "zarrwlr", from = "src" }]
 
+[tool.poetry.package]
+include = ["zarrwlr"]
+
 [tool.poetry.dependencies]
 python = "^3.11"
 mutagen = "^1.47.0"
 rich = "^14.0.0"
+zarr = "^3.0.7"
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.6.1"
