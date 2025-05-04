@@ -56,12 +56,6 @@ def import_file(files: AllowedInputType_import_file_files, target_group: zarr.Gr
             # Bytes als uint8 in file_blob speichern
             blob_arr = np.frombuffer(blob, dtype=np.uint8)
 
-# Das ist noch nicht optimal: Die Chunk-Size sollte konkret festgelegt werden können.
-# Überlegung: Hier mit Opus aber auch mit MP3...: Wir haben komprimierte Daten. Aber wir können auch PCM-kodierte Daten
-# (unkomprimiertes PCM) haben. Die Zugriffslänge in Real-time ist meist unter 10s. Für OPUS/MP3 Stereo ergeben sich
-# 10MByte PCM. 0,2Myte komprimiert. Werden die Files der Datenbank aber über Netz kopiert, sollten die Files nicht zu klein sein.
-# Konkurierendes Lesen ist möglich. 
-# 
 
 # Neue Erkenntnis: Wir legen die Chunk-Size dynamisch fest. Definition:
 #
