@@ -20,7 +20,7 @@ fi
 echo "No activated Python environment. We can progress..."
 
 echo "Import Python- und Poetry-Version from pyproject.toml ..."
-REQUIRED_PYTHON_VERSION=$(grep -Po 'python\s*=\s*"\^?\K[0-9]+\.[0-9]+' pyproject.toml | head -1).0
+REQUIRED_PYTHON_VERSION=$(grep -Po 'python\s*=\s*"\^?\K[0-9]+\.[0-9]+' pyproject.toml | head -1)
 REQUIRED_POETRY_VERSION=$(grep -Po 'poetry-version\s*=\s*"\K[0-9]+\.[0-9]+\.[0-9]+' pyproject.toml || true)
 echo Done.
 echo
