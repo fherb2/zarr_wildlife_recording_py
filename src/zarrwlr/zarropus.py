@@ -1,21 +1,36 @@
+"""Low level objects and functions for work with opus audio of Zarr Wildlife Recording library"""
 
-
+import logging
 from typing import TypedDict, TypeAlias, Dict
 from collections import defaultdict
-from io import BytesIO
+from io import BytesIO, BufferedReader
 from dataclasses import dataclass, asdict
-import os
-import zarr
-import numpy as np
-from typing import Sequence
 from pathlib import Path
 
-def is_opus_file(file_path: Path) -> bool:
-    with open(file_path, 'rb') as f:
-        data = f.read(36)  # ausreichend für ersten Page-Header + OpusHead
-        return b'OpusHead' in data and b'OggS' in data
+# get the module logger   
+logger = logging.getLogger(__name__)
 
+def is_opus_file(file: str | Path | BufferedReader) -> bool:
+    """is_opus_file Tell if the file is a valid opus file."""
 
+    if isinstance(file, str):
+        file = Path(file)
+
+    if isinstance(file, BufferedReader):
+        # read from start position of opened file and reset the
+        # pointer to the value before
+        current_position = file.tell()
+        file.seek(0)
+        data = f.read(36) # range is for first Page-Header + OpusHead
+        file.seek(current_position)
+    elif isinstance(file, Path):
+        # read the same range by opening the file
+        with open(file, 'rb') as f:
+            data = f.read(36)  # range is for first Page-Header + OpusHead
+    else:
+        raise ValueError("file must be of type: str, Path (both as a valid file path) or BufferedReader (as already opened file).")
+
+    return b'OpusHead' in data and b'OggS' in data
 
 
 
@@ -110,7 +125,7 @@ def extract_opus_metadata(blob: bytes) -> OpusMetadata:
         metadata['tags'] = tags
     return metadata
 
-class PacketEntry(TypedDict):
+class PackageEntry(TypedDict):
     offset: int        # Byte-Offset im Blob, wo das Paket beginnt
     size: int          # Paketgröße in Bytes
     time: float        # Zeitstempel in Sekunden (auf Samplebasis)
@@ -118,16 +133,16 @@ class PacketEntry(TypedDict):
     granule: int       # granule_position der Page, in der das Paket endet
     serial: int        # Bitstream-ID
 
-PacketIndex: TypeAlias = dict[int, list[PacketEntry]]  # serial → Liste von Paketen
+PackageIndex: TypeAlias = dict[int, list[PackageEntry]]  # serial → Liste von Paketen
 
-def build_packet_index(opus_blob: bytes, sample_rate: int = 48000) -> PacketIndex:
+def build_package_index(opus_blob: bytes, sample_rate: int = 48000) -> PackageIndex:
     """
     Build a package-index from an Ogg/Opus-Byte-Blob.
-    Get back a dict: { serial → list of PacketEntry }
+    Get back a dict: { serial → list of PackageEntry }
     """
 
     stream = BytesIO(opus_blob)
-    index: PacketIndex = defaultdict(list)
+    index: PackageIndex = defaultdict(list)
 
     page_num = 0
     page_sequence_by_serial = {}
@@ -165,7 +180,7 @@ def build_packet_index(opus_blob: bytes, sample_rate: int = 48000) -> PacketInde
 
         # extract package
         offset = 0
-        current_packet = b''
+        current_package = b''
         current_start = start + 27 + seg_count  # Start des Page-Data-Bereichs
         # continuation = header_type & 0x01 -> Thats a special signal what we don't need here.
         #                                      It says, that this page is a continuation of
@@ -175,7 +190,7 @@ def build_packet_index(opus_blob: bytes, sample_rate: int = 48000) -> PacketInde
         for i, seg_size in enumerate(seg_sizes):
             segment = page_data[offset:offset + seg_size]
             offset += seg_size
-            current_packet += segment
+            current_package += segment
 
             if seg_size < 255:
                 # Package end reached.
@@ -184,21 +199,21 @@ def build_packet_index(opus_blob: bytes, sample_rate: int = 48000) -> PacketInde
                 # 255 in length is, if it is the last segment of a package.
                 sample_end = granule
                 last_sample = last_granule_by_serial.get(serial, 0)
-                packet_samples = sample_end - last_sample
-                sample_start = sample_end - packet_samples
+                package_samples = sample_end - last_sample
+                sample_start = sample_end - package_samples
                 last_granule_by_serial[serial] = sample_end
 
                 time_sec = sample_start / sample_rate
-                packet_entry: PacketEntry = {
-                    "offset": current_start + offset - len(current_packet),
-                    "size": len(current_packet),
+                package_entry: PackageEntry = {
+                    "offset": current_start + offset - len(current_package),
+                    "size": len(current_package),
                     "sample": sample_start,
                     "time": time_sec,
                     "granule": sample_end,
                     "serial": serial
                 }
-                index[serial].append(packet_entry)
-                current_packet = b''
+                index[serial].append(package_entry)
+                current_package = b''
 
         page_num += 1
 

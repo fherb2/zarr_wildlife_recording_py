@@ -1,22 +1,63 @@
-"""Get meta information from (sound)files
-"""
-from pathlib import Path 
+"""File path types and helpers for Zarr Wildlife Recording library"""
+
+import logging
+from typing import Union
+from pathlib import Path
+import hashlib
 import os
 import datetime
 import subprocess
 import json
+from zarrwlr.zarropus import is_opus_file
 
-# we support user depending configured logging
-import logging
-logger = logging.getLogger(__name__)
-
-# application depending installed modules
 try:
     import mutagen
-    MUTAGEN_READY=True
-except:
-    MUTAGEN_READY=False
-    logger.warning("Python module 'mutagen' missing: Some of sound file meta information can not be recognized.")
+    MUTAGEN_LOADED = True
+except ImportError:
+    MUTAGEN_LOADED = False
+
+# get the module logger   
+logger = logging.getLogger(__name__)
+
+
+StrOrPath = Union[str, Path]
+ListOrTuple_of_StrOrPath = Union[list[StrOrPath], tuple[StrOrPath, ...]]
+SingleOrList_of_FilePaths = Union[StrOrPath, ListOrTuple_of_StrOrPath]
+
+class InvalidFilePathError(ValueError):
+    """Value can not be used as valid file path."""
+    def __init__(self, message: str = "File path not valid as single path (str|Path) or list of paths ( list|tuple of str|Path )."):
+        super().__init__(message)
+
+def is_allowed_sound_file_type(file: Path) -> bool:
+    if is_opus_file(file):
+        return True
+    # add additional allowed file types
+    return False
+
+def to_file_path_list(files: SingleOrList_of_FilePaths) -> list[Path]:
+
+    if isinstance(files, (str, Path)):
+        files = [Path(files)]
+    elif isinstance(files, (list, tuple)):
+        files = [Path(item) for item in files]
+    else:
+        raise InvalidFilePathError
+    return files
+
+
+def file_content_hash(file: StrOrPath) -> tuple[str, str]:
+
+    if isinstance(file, str):
+        file = Path(file)
+
+    sha256 = hashlib.sha256()
+    with open(file, 'rb') as f:
+        while chunk := f.read(4096):  # read in blocks to stay safe.
+            sha256.update(chunk)
+
+    return sha256.hexdigest(), 
+
 
 def filemeta(file:str|Path) -> dict:
     f = Path(file) # to be a pathlib.Path object for following access
@@ -93,7 +134,7 @@ def filemeta(file:str|Path) -> dict:
 
     # ###########################
     # mutagen
-    if MUTAGEN_READY:
+    if MUTAGEN_LOADED:
         mutgn_info = {}
         mutgn_tags = {}
         mutg = mutagen.File(f, easy=True)
@@ -146,16 +187,3 @@ def filemeta(file:str|Path) -> dict:
 
 
 
-
-
-
-# Tests
-
-
-from rich.pretty import pprint
-f="tests/testdata/test1.WAV"
-print("--> test1.WAV")
-print_meta_structured(f)
-print("--> karlinsound_Y2025_dayOfYear123_m05_d03_H15_M00_S00.opus")
-f="tests/testdata/karlinsound_Y2025_dayOfYear123_m05_d03_H15_M00_S00.opus"
-print_meta_structured(f)
