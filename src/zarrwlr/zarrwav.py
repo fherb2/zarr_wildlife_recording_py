@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from io import BytesIO, BufferedReader
 import wave
+from typing import TypedDict
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -36,3 +37,8 @@ def is_wav_file(file: str | Path | BufferedReader) -> bool:
         raise ValueError("file must be of type: str, Path (both as a valid file path) or BufferedReader (as already opened file).")
     
     return is_wav
+
+
+class WavMetadata(TypedDict, total=False):
+
+def extract_wav_metadata(blob: bytes) -> WavMetadata:

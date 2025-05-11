@@ -2,13 +2,7 @@ import logging
 from enum import Enum
 from zarrwlr.module_config import ModuleConfig
 
-class LogLevel(str, Enum):
-    CRITICAL = "CRITICAL"
-    ERROR = "ERROR"
-    WARNING = "WARNING"
-    INFO = "INFO"
-    DEBUG = "DEBUG"
-    NOTSET = "NOTSET"
+
 
 class ModuleLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:

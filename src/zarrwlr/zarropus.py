@@ -21,7 +21,7 @@ def is_opus_file(file: str | Path | BufferedReader) -> bool:
         # pointer to the value before
         current_position = file.tell()
         file.seek(0)
-        data = f.read(36) # range is for first Page-Header + OpusHead
+        data = file.read(36) # range is for first Page-Header + OpusHead
         file.seek(current_position)
     elif isinstance(file, Path):
         # read the same range by opening the file
@@ -134,6 +134,7 @@ class PackageEntry(TypedDict):
     serial: int        # Bitstream-ID
 
 PackageIndex: TypeAlias = dict[int, list[PackageEntry]]  # serial → Liste von Paketen
+
 
 def build_package_index(opus_blob: bytes, sample_rate: int = 48000) -> PackageIndex:
     """

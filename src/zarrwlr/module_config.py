@@ -1,7 +1,7 @@
 
 
 import logging
-from zarrwlr.logging_setup import LogLevel
+from zarrwlr.utils import LogLevel
 
 # get the module logger   
 logger = logging.getLogger(__name__)

@@ -167,6 +167,15 @@
               // "streetsidesoftware.code-spell-checker", // Code Spell Checker – see: https://marketplace.visualstudio.com/items?itemName=streetsidesoftware.code-spell-checker
               // "streetsidesoftware.code-spell-checker-german", // adds German language to streetsidesoftware.code-spell-checker
 
+              // "oijaz.unicode-latex",  // Unicode Latex – "Insert unicode symbols for latex names";
+                                      // see: https://marketplace.visualstudio.com/items?itemName=oijaz.unicode-latex
+                 
+              // Markdown
+              // ========
+
+              "adamerose.markdown-wysiwyg", // Markdown Editor – A powerful markdown WYSIWYG editor; 
+                                            // CTRL+SHIFT+E toggles Editor <–> Plain Text; see: https://marketplace.visualstudio.com/items?itemName=adamerose.markdown-wysiwyg
+
               // TOML
               // ====
 
