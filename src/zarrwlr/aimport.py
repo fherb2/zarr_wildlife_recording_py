@@ -1,6 +1,8 @@
 
 
 import subprocess
+import tempfile
+import os
 import logging
 from pathlib import Path
 import hashlib
@@ -9,6 +11,7 @@ from enum import Enum, auto
 import yaml
 from zarrwlr.utils import RestrictedDict, next_numeric_group_name
 import zarr
+from zarrwlr.module_config import ModuleConfig, ModuleStaticConfig
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -195,6 +198,53 @@ class FileMeta:
                 return obj
         else:
             return obj
+        
+def convert_audio_to_ogg(input_path, output_dir, codec='flac', opus_bitrate='160k', ultrasound=False):
+    """
+    Konvertiert eine Audiodatei in einen Ogg-Container mit FLAC oder Opus.
+    - Unterstützt Ultraschallmodus: PCM-Daten bleiben, Zeitbasis wird manipuliert
+    - Rückgabe: Pfad zur Ogg-Datei, Originalrate (nur im Ultraschallmodus)
+    """
+    assert codec in ('flac', 'opus')
+
+    #with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=output_dir) as tmp_out:
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=output_dir) as tmp_out:
+        output_path = tmp_out.name
+
+    print(f"{output_path}")
+    
+    exit(0)
+    
+    
+    original_rate = None
+
+    if codec == 'opus' and input_path.endswith('.opus') and not ultrasound:
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", input_path,
+                "-c", "copy", "-f", "ogg", output_path
+            ], check=True)
+            return output_path, None
+        except subprocess.CalledProcessError:
+            print("Direct copy failed, falling back to re-encode.")
+
+    ffmpeg_cmd = ["ffmpeg", "-y"]
+
+    if codec == 'opus':
+        if ultrasound:
+            # Ermittele ursprüngliche Samplingrate
+  #          original_rate = get_sampling_rate(input_path)
+            ffmpeg_cmd += ["-sample_rate", "48000"]
+        ffmpeg_cmd += ["-i", input_path, "-c:a", "libopus", "-b:a", opus_bitrate]
+
+    elif codec == 'flac':
+        ffmpeg_cmd += ["-i", input_path, "-c:a", "flac"]
+
+    ffmpeg_cmd += ["-f", "ogg", output_path]
+
+    subprocess.run(ffmpeg_cmd, check=True)
+
+    return output_path, original_rate
 
 def import_audio_file(file: str|Path, zarr_original_audio_group: zarr.Group):
     # Analyze File-/Audio-/Codec-Type: we need 
@@ -221,7 +271,7 @@ def import_audio_file(file: str|Path, zarr_original_audio_group: zarr.Group):
 
     # 2) Is 'original file name' and 'original size' known in database?
 
-    # 3) Look for all other meta data inside the file.
+    # 3) Get all other meta data inside the file.
     all_file_meta = str(FileMeta(file))
     print("\n\n--> all_file_meta:")
     print(all_file_meta)
@@ -232,4 +282,8 @@ def import_audio_file(file: str|Path, zarr_original_audio_group: zarr.Group):
 
     # 5) Create array, decode/encode file and import byte blob
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
+    new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
+    # add a version atrtribute to this group
+    new_original_audio_grp.attrs["original_audio_group_version"] = ModuleStaticConfig.versions["file_blob_group_version"]
 
+    convert_audio_to_ogg(file, "/tmp", codec='flac', opus_bitrate='160k', ultrasound=False)
