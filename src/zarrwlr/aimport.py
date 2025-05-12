@@ -2,7 +2,6 @@
 
 import subprocess
 import tempfile
-import os
 import logging
 from pathlib import Path
 import hashlib
@@ -11,7 +10,7 @@ from enum import Enum, auto
 import yaml
 from zarrwlr.utils import RestrictedDict, next_numeric_group_name
 import zarr
-from zarrwlr.module_config import ModuleConfig, ModuleStaticConfig
+from zarrwlr.module_config import ModuleStaticConfig
 
 # get the module logger   
 logger = logging.getLogger(__name__)

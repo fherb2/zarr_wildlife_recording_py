@@ -1146,5 +1146,5 @@ test = ["coverage", "hypothesis", "mypy", "pytest", "pytest-accept", "pytest-asy
 
 [metadata]
 lock-version = "2.1"
-python-versions = "^3.11"
-content-hash = "97a592e397fc83edfe65bd348ba03945191aaf6860fda0ae8e37c371ba45d441"
+python-versions = ">=3.11,<3.12.dev0"
+content-hash = "59f65a7dbf1b7c58e286bc1ee8f31a9f48bd8814d180a382dc6f84f511b21e00"
