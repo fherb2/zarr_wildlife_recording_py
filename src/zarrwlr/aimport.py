@@ -1,5 +1,5 @@
 
-
+import numpy as np
 import subprocess
 import tempfile
 import logging
@@ -8,7 +8,7 @@ import hashlib
 import json
 from enum import Enum, auto
 import yaml
-from zarrwlr.utils import RestrictedDict, next_numeric_group_name
+from zarrwlr.utils import RestrictedDict, next_numeric_group_name, file_size
 import zarr
 from zarrwlr.module_config import ModuleStaticConfig
 
@@ -28,6 +28,10 @@ def _check_ffmpeg_tools():
 
 # We do this check during import:
 _check_ffmpeg_tools()
+
+AUDIO_CHUNK_SIZE:int            = int(2**20) # 8 kByte
+AUDIO_CHUNKS_PER_SHARD:int      =int(40*1024*1024 / AUDIO_CHUNK_SIZE)
+AUDIO_SHARDED_ARRAY_SIZE:int    =AUDIO_CHUNKS_PER_SHARD * AUDIO_CHUNK_SIZE
 
 class AudioCompression(Enum):
     """Shows the principle kind of compression (lossy, lossless, uncompressed)."""
@@ -198,54 +202,86 @@ class FileMeta:
         else:
             return obj
         
-def convert_audio_to_ogg(input_path, output_dir, codec='flac', opus_bitrate='160k', ultrasound=False):
+def convert_audio_to_ogg(audio_file: str|Path, 
+                         target_codec:str = 'flac', # "flac" or "opus"
+                         flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
+                                                          # data; higher values does not really reduce 
+                                                          # data size but need more time and energy. 
+                                                          # Note:
+                                                          # The highest values can produce more data
+                                                          # than lower values. '12' as maximum must not
+                                                          # be the best compression. Check ist: More than
+                                                          # 4 is not really less memory consumption but
+                                                          # wasted time and energy.
+                         opus_bitrate:str = '160k',
+                         temp_dir="/tmp") -> tuple[Path, float, str]:
     """
     Konvertiert eine Audiodatei in einen Ogg-Container mit FLAC oder Opus.
     - Unterstützt Ultraschallmodus: PCM-Daten bleiben, Zeitbasis wird manipuliert
-    - Rückgabe: Pfad zur Ogg-Datei, Originalrate (nur im Ultraschallmodus)
+    - Rückgabe: Pfad zur Ogg-Datei, Faktor Original-Samplingrate / gespeicherter-samplingrate
     """
-    assert codec in ('flac', 'opus')
 
-    #with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=output_dir) as tmp_out:
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=output_dir) as tmp_out:
-        output_path = tmp_out.name
+    def get_source_params(input_file: Path) -> tuple[int, bool]:
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=sample_rate:stream=codec_name",
+            "-of", "json", str(input_file)
+        ]
+        out = subprocess.check_output(args=cmd)
+        info = json.loads(out)
+        sampling_rate = int(info['streams'][0]['sample_rate'])
+        is_opus = info['streams'][0]['codec_name'] == "opus"
+        return sampling_rate, is_opus
 
-    print(f"{output_path}")
-    
-    exit(0)
-    
-    
-    original_rate = None
+    assert target_codec in ('flac', 'opus')
+    assert (flac_compression_level >= 0) and (flac_compression_level <= 12)
 
-    if codec == 'opus' and input_path.endswith('.opus') and not ultrasound:
-        try:
-            subprocess.run([
-                "ffmpeg", "-y", "-i", input_path,
-                "-c", "copy", "-f", "ogg", output_path
-            ], check=True)
-            return output_path, None
-        except subprocess.CalledProcessError:
-            print("Direct copy failed, falling back to re-encode.")
+    audio_file = Path(audio_file)
 
-    ffmpeg_cmd = ["ffmpeg", "-y"]
+    original_rate, is_opus = get_source_params(audio_file)
 
-    if codec == 'opus':
-        if ultrasound:
-            # Ermittele ursprüngliche Samplingrate
-  #          original_rate = get_sampling_rate(input_path)
+    # in order to avoid downsampling, we rescale the time-base and sign this
+    # as ultrasonic
+    sampling_rescale = 1.0
+    is_ultrasonic = (target_codec == "opus") and (original_rate > 48000)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=temp_dir) as tmp_out:
+        tmp_file = Path(tmp_out.name)
+
+    if target_codec == 'opus' and is_opus and not is_ultrasonic:
+        # copy opus encoded data directly into ogg.opus 
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(audio_file),
+            "-c", "copy", "-f", "ogg", str(tmp_file)
+        ], check=True)
+        return tmp_file, sampling_rescale, target_codec
+
+    ffmpeg_cmd = ["ffmpeg", "-y"]   
+
+    if target_codec == 'opus':
+        if is_ultrasonic:
+            # we interprete sampling rate as "48000" to can use opus for ultrasonic
+            # (for use late, it must be re-intrepreted)
             ffmpeg_cmd += ["-sample_rate", "48000"]
-        ffmpeg_cmd += ["-i", input_path, "-c:a", "libopus", "-b:a", opus_bitrate]
+            sampling_rescale = float(original_rate) / 48000.0
+        ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "libopus", "-b:a", opus_bitrate]
+        ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
+        ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
 
-    elif codec == 'flac':
-        ffmpeg_cmd += ["-i", input_path, "-c:a", "flac"]
+    elif target_codec == 'flac':
+        ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
+        ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
 
-    ffmpeg_cmd += ["-f", "ogg", output_path]
+    ffmpeg_cmd += ["-f", "ogg", str(tmp_file)]
 
     subprocess.run(ffmpeg_cmd, check=True)
 
-    return output_path, original_rate
+    return tmp_file, sampling_rescale, target_codec
 
-def import_audio_file(file: str|Path, zarr_original_audio_group: zarr.Group):
+def import_audio_file(file: str|Path, 
+                      zarr_original_audio_group: zarr.Group,
+                      target_codec:str = 'flac'
+                      ):
     # Analyze File-/Audio-/Codec-Type: we need 
     #   original file name
     #   original file size
@@ -284,5 +320,33 @@ def import_audio_file(file: str|Path, zarr_original_audio_group: zarr.Group):
     new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
     # add a version atrtribute to this group
     new_original_audio_grp.attrs["original_audio_group_version"] = ModuleStaticConfig.versions["file_blob_group_version"]
+    # do conversation to ogg.flac or ogg.opus; scale sampling in case of opus and >48kS/s
+    tmp_file, sampling_base_scaling, target_codec = convert_audio_to_ogg(file, target_codec=target_codec)
 
-    convert_audio_to_ogg(file, "/tmp", codec='flac', opus_bitrate='160k', ultrasound=False)
+    tmp_file_byte_size = file_size(tmp_file)
+
+    ogg_file_blob_array = new_original_audio_grp.create_dataset(
+        "ogg_file_blob",
+        shape           = tmp_file_byte_size,
+        chunks          = (AUDIO_CHUNK_SIZE,),
+        shards          = (AUDIO_SHARDED_ARRAY_SIZE,),
+        dtype           = np.uint8,
+        overwrite       = True,
+    )
+
+    with open(tmp_file, "rb") as f:
+        for offset in range(0, tmp_file_byte_size, AUDIO_CHUNK_SIZE):
+            buffer = f.read(AUDIO_CHUNK_SIZE)
+            ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
+
+    # Save Meta data to the group
+    new_original_audio_grp.attrs["encoding"]                = target_codec
+    new_original_audio_grp.attrs["sampling_base_scaling"]   = sampling_base_scaling
+    new_original_audio_grp.attrs["base_features"]           = base_features
+    new_original_audio_grp.attrs["ffprobe_meta_data_structure"] = all_file_meta
+
+    # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
+
+
+    # 7) We can finally save the attribute "import_fimalzed" with True
+    new_original_audio_grp.attrs["import_finalized"] = True
