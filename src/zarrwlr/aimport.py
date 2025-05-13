@@ -8,10 +8,10 @@ import hashlib
 import json
 from enum import Enum, auto
 import yaml
-import mutagen
 from mutagen import File as MutagenFile
 import zarr
-from .utils import RestrictedDict, next_numeric_group_name, file_size
+from .utils import next_numeric_group_name, file_size
+from .types import RestrictedDict
 from .config import Config
 from .exceptions import Doublet
 
