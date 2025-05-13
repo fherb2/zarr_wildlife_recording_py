@@ -1,6 +1,6 @@
 
 
-from .logging_setup import setup_module_logging
+from .logsetup import setup_module_logging
 
 # Beispiel: Diese Funktionen werden zur Verfügung gestellt, wenn man 'import zarrwlr' angibt.
 # from .core import CoreClass, useful_function

@@ -1,8 +1,7 @@
+"""Package logging module"""
+
 import logging
-from enum import Enum
-from zarrwlr.module_config import ModuleConfig
-
-
+from zarrwlr.config import ModuleConfig
 
 class ModuleLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:

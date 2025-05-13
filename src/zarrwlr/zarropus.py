@@ -1,4 +1,5 @@
-"""Low level objects and functions for work with opus audio of Zarr Wildlife Recording library"""
+# veraltet
+# --------
 
 import logging
 from typing import TypedDict, TypeAlias, Dict

@@ -6,21 +6,13 @@ from io import BufferedReader
 import os
 from types import MappingProxyType
 from collections.abc import Mapping, MutableMapping
-from enum import Enum
+
 import logging
 import json
 import yaml
 
 # get the module logger
 logger = logging.getLogger(__name__)
-
-class LogLevel(str, Enum):
-    CRITICAL = "CRITICAL"
-    ERROR = "ERROR"
-    WARNING = "WARNING"
-    INFO = "INFO"
-    DEBUG = "DEBUG"
-    NOTSET = "NOTSET"
 
 def next_numeric_group_name(zarr_group: zarr.Group) -> str:
     """next_numeric_group_name Return next free number for numbered groups.

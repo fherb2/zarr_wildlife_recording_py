@@ -8,9 +8,12 @@ import hashlib
 import json
 from enum import Enum, auto
 import yaml
-from zarrwlr.utils import RestrictedDict, next_numeric_group_name, file_size
+import mutagen
+from mutagen import File as MutagenFile
 import zarr
-from zarrwlr.module_config import ModuleStaticConfig
+from .utils import RestrictedDict, next_numeric_group_name, file_size
+from .config import Config
+from .exceptions import Doublet
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -36,6 +39,7 @@ AUDIO_SHARDED_ARRAY_SIZE:int    =AUDIO_CHUNKS_PER_SHARD * AUDIO_CHUNK_SIZE
 class AudioCompression(Enum):
     """Shows the principle kind of compression (lossy, lossless, uncompressed)."""
     def _generate_next_value_(name, start, count, last_values):
+        # is used by 'auto()'
         return name  # -> set value automated to "UNCOMPRESSED", "LOSSLESS", ...
 
     UNCOMPRESSED = auto()
@@ -146,12 +150,64 @@ def base_features_from_audio_file(file: str|Path) -> AudioFileBaseFeatures:
     return base_features
 
 
+def mutagen_info(filepath: str | Path) -> dict:
+
+    audio = MutagenFile(Path(filepath), easy=False)
+    if not audio:
+        raise ValueError(f"Unsupported or unreadable file for 'mutagen': {filepath}")
+
+    info = {}
+    if audio.info:
+        info['technical'] = {
+            'length': getattr(audio.info, 'length', None),
+            'bitrate': getattr(audio.info, 'bitrate', None),
+            'sample_rate': getattr(audio.info, 'sample_rate', None),
+            'channels': getattr(audio.info, 'channels', None),
+            'codec': audio.__class__.__name__,
+        }
+
+    info['tags'] = {}
+    if audio.tags:
+        for key, value in audio.tags.items():
+            try:
+                # Bei manchen Formaten sind die Werte Listen, bei anderen nicht
+                info['tags'][key] = value.text if hasattr(value, 'text') else str(value)
+            except Exception:
+                info['tags'][key] = str(value)
+
+    return info
+
+
+
+def is_audio_in_original_audio_group( zarr_original_audio_group: zarr.Group,
+                                      base_features: AudioFileBaseFeatures,
+                                      sh246_check_only: bool = False
+                                    ) -> bool:
+    for group_name in zarr_original_audio_group:
+        # we need check this group only the name is only a number
+        if group_name.isdigit():
+            # this should be a original audio file database group...
+            zarr_audio_database_grp = zarr_original_audio_group[group_name]
+            if "type" in zarr_audio_database_grp.attrs:
+                if zarr_audio_database_grp.attrs["type"] == "original_audio_file":
+                    # Ok: Now we are shure, that this is a group of an imported audio file
+                    # Check if the base_features are the same:
+                    bf = zarr_audio_database_grp.attrs["base_features"]
+                    if (base_features.SH256) == bf["SH256"]:
+                        if sh246_check_only:
+                            return True
+                        elif    (base_features.FILENAME   == bf["FILENAME"]) \
+                            and (base_features.SIZE_BYTES == bf["SIZE_BYTES"]):
+                            return True
+    return False
 
 class FileMeta:
-    """Full audio relevant meta information of a file."""
-    def __init__(self, file_path: str|Path, audio_only:bool=True):
-        file_path = Path(file_path)
-        # Befehl für ffprobe, um alle relevanten Metadaten zu extrahieren
+    """Full audio relevant meta information of a file by ffprobe and mutagen."""
+    def __init__(self, file: str|Path, audio_only:bool=True):
+        file = Path(file)
+
+        # from ffprobe
+        # ------------
         cmd = [
             "ffprobe",
             "-v", "error",
@@ -159,21 +215,25 @@ class FileMeta:
             "-show_format",
             "-show_streams",
             "-show_chapters",
-            str(file_path)
+            str(file)
         ]
         result = subprocess.run(cmd,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 check=True,
                                 text=True)
-        self.meta = self._typing_numbers(json.loads(result.stdout))
+        self.meta = {"ffprobe": self._typing_numbers(json.loads(result.stdout)) }
 
         # remove non-audio streams (but doesn't changes the index number of the audio
         # streams if other streams are sorted out before)
-        self.meta["streams"] = [
+        self.meta["ffprobe"]["streams"] = [
                                 stream for stream in self.meta.get("streams", [])
                                 if stream.get("codec_type") == "audio"
                             ]
+        
+        # via mutagen
+        # -----------
+        self.meta["mutagen"] = mutagen_info(file)
         
     def __str__(self):
         return self.as_yaml()
@@ -278,7 +338,7 @@ def convert_audio_to_ogg(audio_file: str|Path,
 
     return tmp_file, sampling_rescale, target_codec
 
-def import_audio_file(file: str|Path, 
+def import_original_audio_file(file: str|Path, 
                       zarr_original_audio_group: zarr.Group,
                       target_codec:str = 'flac'
                       ):
@@ -299,18 +359,19 @@ def import_audio_file(file: str|Path,
     # Put all meta data as attributes.
     # Set attribute 'import_finalized' with true. Thats the marker for a completed import. 
 
+    # 0) Create Group or/and check if the original audio file group has the right version
+
     # 1) Analyze File-/Audio-/Codec-Type
     base_features = base_features_from_audio_file(file)
     if not base_features[base_features.HAS_AUDIO_STREAM]:
         raise ValueError(f"File '{file}' has no audio stream")
 
-    # 2) Is 'original file name' and 'original size' known in database?
+    # 2) Is file yet present in database?
+    if is_audio_in_original_audio_group(zarr_original_audio_group, base_features):
+        raise Doublet("Same file seems yet in database. Same hash, same file name same size.")
 
     # 3) Get all other meta data inside the file.
     all_file_meta = str(FileMeta(file))
-    print("\n\n--> all_file_meta:")
-    print(all_file_meta)
-    print("---End---\n")
 
     # 4) Calculate the next free 'group-number'.
     new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
@@ -319,14 +380,14 @@ def import_audio_file(file: str|Path,
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
     new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
     # add a version atrtribute to this group
-    new_original_audio_grp.attrs["original_audio_group_version"] = ModuleStaticConfig.versions["file_blob_group_version"]
+    new_original_audio_grp.attrs["original_audio_group_version"] = Config.original_audio_group_version
     # do conversation to ogg.flac or ogg.opus; scale sampling in case of opus and >48kS/s
     tmp_file, sampling_base_scaling, target_codec = convert_audio_to_ogg(file, target_codec=target_codec)
 
     tmp_file_byte_size = file_size(tmp_file)
 
-    ogg_file_blob_array = new_original_audio_grp.create_dataset(
-        "ogg_file_blob",
+    ogg_file_blob_array = new_original_audio_grp.create_array(
+        name            = "ogg_file_blob",
         shape           = tmp_file_byte_size,
         chunks          = (AUDIO_CHUNK_SIZE,),
         shards          = (AUDIO_SHARDED_ARRAY_SIZE,),
@@ -340,6 +401,7 @@ def import_audio_file(file: str|Path,
             ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
 
     # Save Meta data to the group
+    new_original_audio_grp.attrs["type"]                    = "original_audio_file"
     new_original_audio_grp.attrs["encoding"]                = target_codec
     new_original_audio_grp.attrs["sampling_base_scaling"]   = sampling_base_scaling
     new_original_audio_grp.attrs["base_features"]           = base_features
