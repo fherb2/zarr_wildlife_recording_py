@@ -3,7 +3,9 @@
 from enum import Enum
 import json
 import yaml
+from enum import Enum, auto
 from collections.abc import MutableMapping
+from .types import RestrictedDict
 
 class LogLevel(str, Enum):
     CRITICAL = "CRITICAL"
@@ -12,6 +14,44 @@ class LogLevel(str, Enum):
     INFO = "INFO"
     DEBUG = "DEBUG"
     NOTSET = "NOTSET"
+
+class AudioCompression(Enum):
+    """Shows the principle kind of compression (lossy, lossless, uncompressed)."""
+    def _generate_next_value_(name, start, count, last_values):
+        # is used by 'auto()'
+        return name  # -> set value automated to "UNCOMPRESSED", "LOSSLESS", ...
+
+    UNCOMPRESSED = auto()
+    LOSSLESS_COMPRESSED = auto()
+    LOSSY_COMPRESSED = auto()
+    UNKNOWN = auto()
+
+    def __str__(self):
+        return self.value
+
+class AudioFileBaseFeatures(RestrictedDict):
+    """Basic information about an audio file."""
+
+    FILENAME = "filename"
+    SIZE_BYTES = "size_bytes"
+    SH256 = "sha256"
+    HAS_AUDIO_STREAM = "has_audio_stream"
+    CONTAINER_FORMAT = "container_format"
+    NB_STREAMS = "nb_streams"
+    CODEC_PER_STREAM = "codec_per_stream"
+    CODEC_COMPRESSION_KIND_PER_STREAM = "codec_compression_kind_per_stream"
+    
+    key_specs = [ 
+                # as: (key-name, data-type, default-value)
+                (FILENAME, str, None), 
+                (SIZE_BYTES, int, None),
+                (SH256, str, None),
+                (HAS_AUDIO_STREAM, bool, False),
+                (CONTAINER_FORMAT, str, None),
+                (NB_STREAMS, int, 0),
+                (CODEC_PER_STREAM, list, []),
+                (CODEC_COMPRESSION_KIND_PER_STREAM, list, [])
+            ]
 
 class RestrictedDict(MutableMapping):
     """Base class for dictionaries with fixed and restricted keys.
