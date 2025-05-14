@@ -1,11 +1,11 @@
 """Package logging module"""
 
 import logging
-from zarrwlr.config import ModuleConfig
+from .config import Config
 
 class ModuleLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        level_name = getattr(ModuleConfig, "log_level", None)
+        level_name = getattr(Config, "log_level", None)
         if level_name is None:
             return True
         min_level = logging._nameToLevel.get(level_name.upper(), logging.WARNING)
@@ -13,7 +13,7 @@ class ModuleLogFilter(logging.Filter):
 
 class DebugPrintHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
-        if getattr(ModuleConfig, "debug", False):
+        if getattr(Config, "debug", False):
             try:
                 msg = self.format(record)
                 print(f"[DEBUG-PRINT] {msg}")

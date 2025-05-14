@@ -1,6 +1,5 @@
 """Types and Enum definitions"""
 
-from enum import Enum
 import json
 import yaml
 from enum import Enum, auto
