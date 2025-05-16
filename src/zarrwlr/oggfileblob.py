@@ -15,7 +15,44 @@ OGG_MAX_PAGE_SIZE = 65536
 # get the module logger   
 logger = logging.getLogger(__name__)
 
-def convert_audio_to_ogg(audio_file: str|Path, 
+def get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
+    """
+    Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
+    
+    Args:
+        source_sample_fmt (str): Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
+        target_codec (str): "flac" oder "opus"
+    
+    Returns:
+        str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
+    """
+
+    # Mappings nach Fähigkeiten der Codecs
+    flac_supported = ["s16", "s32", "flt"]
+    opus_supported = ["s16", "s24", "flt"]
+
+    # Auflösen von planar zu packed
+    normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
+
+    if target_codec == "flac":
+        if normalized_fmt in flac_supported:
+            return normalized_fmt
+        # fallback
+        return "s32" if normalized_fmt.startswith("s") else "flt"
+
+    elif target_codec == "opus":
+        # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
+        if normalized_fmt in opus_supported:
+            return normalized_fmt
+        # fallback auf float oder s16
+        return "flt" if normalized_fmt.startswith("f") else "s16"
+
+    else:
+        raise NotImplementedError(f"Unsupported codec: {target_codec}")
+
+
+def import_audio_to_ogg_blob( 
+                         audio_file: str|Path, 
                          target_codec:str = 'flac', # "flac" or "opus"
                          flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
                                                           # data; higher values does not really reduce 
@@ -32,54 +69,67 @@ def convert_audio_to_ogg(audio_file: str|Path,
     Konvertiert eine Audiodatei in einen Ogg-Container mit FLAC oder Opus.
     - Unterstützt Ultraschallmodus: PCM-Daten bleiben, Zeitbasis wird manipuliert
     - Rückgabe: Pfad zur Ogg-Datei, Faktor Original-Samplingrate / gespeicherte samplingrate
+
+    Bisher wird nur ein Audio-Stream unterstützt. Jedoch mit beliebig vielen Kanälen.
     """
 
-    def get_source_params(input_file: Path) -> tuple[int, bool]:
+    assert target_codec in ('flac', 'opus') 
+    assert (flac_compression_level >= 0) and (flac_compression_level <= 12)
+
+    audio_file = Path(audio_file)
+
+    def get_source_params(input_file: Path) -> tuple[int, str, bool]:
         cmd = [
             "ffprobe", "-v", "error", "-select_streams", "a:0",
-            "-show_entries", "stream=sample_rate:stream=codec_name",
+            "-show_entries", "stream=sample_rate:stream=codec_name:stream:sample_fmt",
             "-of", "json", str(input_file)
         ]
         out = subprocess.check_output(args=cmd)
         info = json.loads(out)
         sampling_rate = int(info['streams'][0]['sample_rate'])
         is_opus = info['streams'][0]['codec_name'] == "opus"
-        return sampling_rate, is_opus
+        sample_format = info['streams'][0]['sample_fmt']
+        return sampling_rate, sample_format, is_opus
 
-    assert target_codec in ('flac', 'opus')
-    assert (flac_compression_level >= 0) and (flac_compression_level <= 12)
 
-    audio_file = Path(audio_file)
+    original_rate, original_sample_format, original_is_opus = get_source_params(audio_file)
+    target_sample_format = get_ffmpeg_sample_fmt(original_sample_format, 'opus' if original_is_opus else 'flac')
 
-    original_rate, is_opus = get_source_params(audio_file)
-    
-    Im Weiteren müssen die Parameter des im File-Blob gespeicherten Inhalts auch abgelegt werden:
-    Diese werden beim dekodieren benötigt!
-
-    # in order to avoid downsampling, we rescale the time-base and sign this
-    # as ultrasonic
-    sampling_rescale = 1.0
+    # In case, the target codec is 'opus', a lossy compress format:
+    # 
+    #   In contrast to 'flac', 'opus' codec can only use sampling frequencies of 48kS/s (or lower)! 
+    #   If the source has a higher sampling frequency, we would loose information. This is important
+    #   insofar as the source could be specialized for ultrasonic frequencies! In order to can compress
+    #   such high frequencies, we use a trick: For the compressing algorithm, we say 'source is 48kS/s'.
+    #   but we remember the factor of the real sampling frequency to this 48kS/s. If we uncompress
+    #   the data later for processing or export, we reinterprete the sampling fequency to the original 
+    #   value.
+    #   There's only one drawback: If these audio has also very deep frequencies, so the opus comprression
+    #   algorithm can interprete these as inaudible and remove all of them. To avoid this, use 'flac'
+    #   or downsample the audio source to 48kS/s before.
+    #   
+    sampling_rescale_factor = 1.0
     is_ultrasonic = (target_codec == "opus") and (original_rate > 48000)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=temp_dir) as tmp_out:
         tmp_file = Path(tmp_out.name)
 
-    if target_codec == 'opus' and is_opus and not is_ultrasonic:
+    if target_codec == 'opus' and original_is_opus and not is_ultrasonic:
         # copy opus encoded data directly into ogg.opus 
         subprocess.run([
             "ffmpeg", "-y", "-i", str(audio_file),
-            "-c", "copy", "-f", "ogg", str(tmp_file)
+            "-c", "copy", "-sample_fmt", target_sample_format,
+            "-f", "ogg", str(tmp_file)
         ], check=True)
-        return tmp_file, sampling_rescale, target_codec
+        return tmp_file, sampling_rescale_factor, target_codec
 
     ffmpeg_cmd = ["ffmpeg", "-y"]   
 
     if target_codec == 'opus':
         if is_ultrasonic:
             # we interprete sampling rate as "48000" to can use opus for ultrasonic
-            # (for use late, it must be re-intrepreted)
             ffmpeg_cmd += ["-sample_rate", "48000"]
-            sampling_rescale = float(original_rate) / 48000.0
+            sampling_rescale_factor = float(original_rate) / 48000.0
         ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "libopus", "-b:a", opus_bitrate]
         ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
         ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
@@ -87,12 +137,20 @@ def convert_audio_to_ogg(audio_file: str|Path,
     elif target_codec == 'flac':
         ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
         ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
+    else:
+        NotImplementedError(f"Target codec {target_codec} is not (yet) implemented.")
 
-    ffmpeg_cmd += ["-f", "ogg", str(tmp_file)]
+    ffmpeg_cmd += ["-sample_fmt", target_sample_format, "-f", "ogg", str(tmp_file)]
 
     subprocess.run(ffmpeg_cmd, check=True)
 
-    return tmp_file, sampling_rescale, target_codec
+    An dieser Stelle ist der file_blob erst mal im temporären File und noch nicht in der Datenbank.
+    Das wäre hier jetzt die richtige Stelle.
+    
+    file_blob_parameters: Es müssen die Parameter des im File-Blob gespeicherten Inhalts auch abgelegt werden:
+    Diese werden teilweise beim dekodieren benötigt!
+
+    return tmp_file, sampling_rescale_factor, target_codec
 
 def decode_ogg_bytes_to_pcm(ogg_bytes: bytes, sampling_rate: int, channels: int = 1, dtype=np.int16):
     cmd = [

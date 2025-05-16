@@ -140,7 +140,7 @@ class AudioFileBaseFeatures(RestrictedDict):
                 (CODEC_PER_STREAM, list, []),
                 (SAMPLING_RATE_PER_STREAM, list[int], []),
                 (SAMPLE_FORMAT_PER_STREAM_AS_DTYPE, list, []),
-                (SAMPLE_FORMAT_PER_STREAM_IS_PLANAR, list, []),
+                (SAMPLE_FORMAT_PER_STREAM_IS_PLANAR, list[bool], []),
                 (CHANNELS_PER_STREAM, list[int], []),
                 (CODEC_COMPRESSION_KIND_PER_STREAM, list[AudioCompression], [])
             ]
@@ -155,4 +155,22 @@ AudioSampleFormatMap = {
         "dblp": np.float64,  # planar
 }
     
-    
+class OriginalAudioBlobFeatures(RestrictedDict):
+    """Parameters of the file-blob of the original audio data."""
+
+    CONTAINER_FORMAT = "container_format"
+    SAMPLING_RATE_OF_COMPRESSION = "sampling_rate_of_compression"
+    SAMPLING_RESCALE_FACTOR = "sampling_rescale_factor"
+    SAMPLE_FORMAT_AS_DTYPE = "sample_format_as_dtype"
+    SAMPLE_FORMAT_IS_PLANAR = "sample_format_is_planar"
+    CHANNELS = "channels"
+
+    key_specs = [ 
+                # as: (key-name, data-type, default-value)
+                (CONTAINER_FORMAT, str, None),
+                (SAMPLING_RATE_OF_COMPRESSION, int, None),
+                (SAMPLING_RESCALE_FACTOR, float, 1.0)
+                (SAMPLE_FORMAT_AS_DTYPE, np.dtype, np.int16),
+                (SAMPLE_FORMAT_IS_PLANAR, bool, False),
+                (CHANNELS, int, 1)
+            ]

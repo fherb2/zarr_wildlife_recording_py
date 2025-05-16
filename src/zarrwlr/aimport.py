@@ -286,6 +286,8 @@ def import_original_audio_file(file: str|Path,
     base_features = base_features_from_audio_file(file)
     if not base_features[base_features.HAS_AUDIO_STREAM]:
         raise ValueError(f"File '{file}' has no audio stream")
+    if base_features.NB_STREAMS > 1:
+        raise NotImplementedError("Audio file has more than one audio stream. Import of more than one audio streams (with any number of audio channels) is not yet supported.")
 
     # 2) Is file yet present in database?
     if is_audio_in_original_audio_group(zarr_original_audio_group, base_features):
@@ -293,25 +295,28 @@ def import_original_audio_file(file: str|Path,
 
     # 3) Get the complete meta data inside the file.
     all_file_meta = str(FileMeta(file))
-    
+
+    # 4) Calculate the next free 'group-number'.
+    new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
+    new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
+    # add a version attribute to this group
+    new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
+
     # Save Original-Audio-Meta data to the group
+    # These data specify the source and not the following file blob!
     new_original_audio_grp.attrs["type"]                    = "original_audio_file"
     new_original_audio_grp.attrs["encoding"]                = target_codec
     new_original_audio_grp.attrs["sampling_base_scaling"]   = sampling_base_scaling
     new_original_audio_grp.attrs["base_features"]           = base_features
     new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
 
-    # 4) Calculate the next free 'group-number'.
-    new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
-
     # 5) Create array, decode/encode file and import byte blob
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
-    new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
+    
     
     Vielleicht ab hier in oggfileblob implementieren:
 
-    # add a version attribute to this group
-    new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
+    
     # do conversation to ogg.flac or ogg.opus; scale sampling in case of opus and >48kS/s
     tmp_file, sampling_base_scaling, target_codec = convert_audio_to_ogg(file, target_codec=target_codec)
 
@@ -331,7 +336,7 @@ def import_original_audio_file(file: str|Path,
             buffer = f.read(Config.original_audio_chunk_size)
             ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
             
-    Achtung: Hier noch die Metadaten für den gespeicherten Stream erzeugen und ablegen (bzw. in oggfileblob.py)
+    Achtung: Bis   hiernoch die Metadaten für den gespeicherten Stream erzeugen und ablegen (bzw. in oggfileblob.py)
             
 
 
