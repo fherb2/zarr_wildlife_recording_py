@@ -111,7 +111,11 @@
 
     // ------------------------------------------------------------------------
     // Standard is: no run options
-    [],
+    ["--device", "/dev/snd", // für direkten ALSA-Zugriff (falls das geht)
+    "-v", "${env:HOME}/.config/pulse:/home/vscode/.config/pulse",  // Authentifizierung PulseAudio
+    "-v", "/run/user/1000/pulse:/run/user/1000/pulse",             // PulseAudio Socket
+    "-e", "PULSE_SERVER=unix:/run/user/1000/pulse/native"           // Hier lauscht PulseAudio
+    ],
 
 
     // in case the image includes JupyterLab, ... :
