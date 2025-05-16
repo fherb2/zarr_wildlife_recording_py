@@ -1,7 +1,6 @@
 
 import numpy as np
 import subprocess
-import tempfile
 import logging
 from pathlib import Path
 import hashlib
@@ -12,7 +11,8 @@ import zarr
 from .utils import next_numeric_group_name, file_size
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch
-from .types import AudioFileBaseFeatures, AudioCompression
+from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
+from .oggfileblob import convert_audio_to_ogg
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None
         check_if_original_audio_group(group = root[group_path])
 
 def check_if_original_audio_group(group:zarr.Group) -> bool:
-    if not ("finally_created" in group.attrs):
+    if "finally_created" not in group.attrs:
         raise ZarrComponentIncomplete(f"Incomplete initialized or foreign group: {group}. Either given group is not an 'original audio group' or group initialization was broken.")
     grp_ok =     ("magic_id" in group.attrs) \
              and (group.attrs["magic_id"] == Config.original_audio_group_magic_id) \
@@ -122,6 +122,10 @@ def base_features_from_audio_file(file: str|Path) -> AudioFileBaseFeatures:
         base_features[base_features.NB_STREAMS]       = len(streams)
         base_features[base_features.HAS_AUDIO_STREAM] = len(streams) > 0
         base_features[base_features.CODEC_PER_STREAM] = list({stream.get("codec_name", "unknown") for stream in streams})
+        base_features[base_features.SAMPLING_RATE_PER_STREAM] = list({int(stream.get("sample_rate", None)) for stream in streams})
+        base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = list({AudioSampleFormatMap.get(stream.get("sample_fmt", "s16")) for stream in streams})
+        base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = list({stream.get("sample_fmt", "s16").endswith("p") for stream in streams})
+        base_features[base_features.CHANNELS_PER_STREAM] = list({int(stream.get("channels", None)) for stream in streams})
 
         base_features[base_features.CODEC_COMPRESSION_KIND_PER_STREAM] = []
         for codec in base_features[base_features.CODEC_PER_STREAM]:
@@ -136,7 +140,7 @@ def base_features_from_audio_file(file: str|Path) -> AudioFileBaseFeatures:
                 hasher.update(chunk)
         base_features[base_features.SH256] = hasher.hexdigest()
 
-    except Exception as e:
+    except Exception:
         # so reset to default
         base_features = AudioFileBaseFeatures()
 
@@ -252,81 +256,7 @@ class FileMeta:
         else:
             return obj
         
-def convert_audio_to_ogg(audio_file: str|Path, 
-                         target_codec:str = 'flac', # "flac" or "opus"
-                         flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
-                                                          # data; higher values does not really reduce 
-                                                          # data size but need more time and energy. 
-                                                          # Note:
-                                                          # The highest values can produce more data
-                                                          # than lower values. '12' as maximum must not
-                                                          # be the best compression. Check ist: More than
-                                                          # 4 is not really less memory consumption but
-                                                          # wasted time and energy.
-                         opus_bitrate:str = '160k',
-                         temp_dir="/tmp") -> tuple[Path, float, str]:
-    """
-    Konvertiert eine Audiodatei in einen Ogg-Container mit FLAC oder Opus.
-    - Unterstützt Ultraschallmodus: PCM-Daten bleiben, Zeitbasis wird manipuliert
-    - Rückgabe: Pfad zur Ogg-Datei, Faktor Original-Samplingrate / gespeicherter-samplingrate
-    """
 
-    def get_source_params(input_file: Path) -> tuple[int, bool]:
-        cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "a:0",
-            "-show_entries", "stream=sample_rate:stream=codec_name",
-            "-of", "json", str(input_file)
-        ]
-        out = subprocess.check_output(args=cmd)
-        info = json.loads(out)
-        sampling_rate = int(info['streams'][0]['sample_rate'])
-        is_opus = info['streams'][0]['codec_name'] == "opus"
-        return sampling_rate, is_opus
-
-    assert target_codec in ('flac', 'opus')
-    assert (flac_compression_level >= 0) and (flac_compression_level <= 12)
-
-    audio_file = Path(audio_file)
-
-    original_rate, is_opus = get_source_params(audio_file)
-
-    # in order to avoid downsampling, we rescale the time-base and sign this
-    # as ultrasonic
-    sampling_rescale = 1.0
-    is_ultrasonic = (target_codec == "opus") and (original_rate > 48000)
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=temp_dir) as tmp_out:
-        tmp_file = Path(tmp_out.name)
-
-    if target_codec == 'opus' and is_opus and not is_ultrasonic:
-        # copy opus encoded data directly into ogg.opus 
-        subprocess.run([
-            "ffmpeg", "-y", "-i", str(audio_file),
-            "-c", "copy", "-f", "ogg", str(tmp_file)
-        ], check=True)
-        return tmp_file, sampling_rescale, target_codec
-
-    ffmpeg_cmd = ["ffmpeg", "-y"]   
-
-    if target_codec == 'opus':
-        if is_ultrasonic:
-            # we interprete sampling rate as "48000" to can use opus for ultrasonic
-            # (for use late, it must be re-intrepreted)
-            ffmpeg_cmd += ["-sample_rate", "48000"]
-            sampling_rescale = float(original_rate) / 48000.0
-        ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "libopus", "-b:a", opus_bitrate]
-        ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
-        ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
-
-    elif target_codec == 'flac':
-        ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
-        ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
-
-    ffmpeg_cmd += ["-f", "ogg", str(tmp_file)]
-
-    subprocess.run(ffmpeg_cmd, check=True)
-
-    return tmp_file, sampling_rescale, target_codec
 
 def import_original_audio_file(file: str|Path, 
                       zarr_original_audio_group: zarr.Group,
@@ -363,6 +293,13 @@ def import_original_audio_file(file: str|Path,
 
     # 3) Get the complete meta data inside the file.
     all_file_meta = str(FileMeta(file))
+    
+    # Save Original-Audio-Meta data to the group
+    new_original_audio_grp.attrs["type"]                    = "original_audio_file"
+    new_original_audio_grp.attrs["encoding"]                = target_codec
+    new_original_audio_grp.attrs["sampling_base_scaling"]   = sampling_base_scaling
+    new_original_audio_grp.attrs["base_features"]           = base_features
+    new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
 
     # 4) Calculate the next free 'group-number'.
     new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
@@ -370,6 +307,9 @@ def import_original_audio_file(file: str|Path,
     # 5) Create array, decode/encode file and import byte blob
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
     new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
+    
+    Vielleicht ab hier in oggfileblob implementieren:
+
     # add a version attribute to this group
     new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
     # do conversation to ogg.flac or ogg.opus; scale sampling in case of opus and >48kS/s
@@ -390,19 +330,18 @@ def import_original_audio_file(file: str|Path,
         for offset in range(0, tmp_file_byte_size, Config.original_audio_chunk_size):
             buffer = f.read(Config.original_audio_chunk_size)
             ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
+            
+    Achtung: Hier noch die Metadaten für den gespeicherten Stream erzeugen und ablegen (bzw. in oggfileblob.py)
+            
 
-    # Save Meta data to the group
-    new_original_audio_grp.attrs["type"]                    = "original_audio_file"
-    new_original_audio_grp.attrs["encoding"]                = target_codec
-    new_original_audio_grp.attrs["sampling_base_scaling"]   = sampling_base_scaling
-    new_original_audio_grp.attrs["base_features"]           = base_features
-    new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
+
+
 
     # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
 
-# Das ist der letzte Abschnitt, der fehlt.
 
 
+    ----------- bis hier
 
     # 7) We can finally save the attribute "finally_created" with True
     new_original_audio_grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
