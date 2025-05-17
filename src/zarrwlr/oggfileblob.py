@@ -17,6 +17,11 @@ OGG_MAX_PAGE_SIZE = 65536
 # get the module logger   
 logger = logging.getLogger(__name__)
 
+def import_audio_to_blob(zarr_original_audio_group: zarr.Group, file_to_import: str | Path):
+    _create_index_zarr(_import_audio_to_ogg_blob(zarr_original_audio_group,
+                                                 file_to_import),
+                       zarr_original_audio_group)
+    
 def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
     """
     Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
@@ -52,9 +57,7 @@ def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
     else:
         raise NotImplementedError(f"Unsupported codec: {target_codec}")
 
-Eigentlich kann man im Import auch das Erstellen des Indexes dazu zählen: Evtl: Besser strukturieren.
-
-def import_audio_to_ogg_blob( 
+def _import_audio_to_ogg_blob( 
                          original_audio_grp: zarr.Group,
                          audio_file: str|Path, 
                          audio_file_blob_array_name: str = "ogg_file_blob",
@@ -198,7 +201,7 @@ def import_audio_to_ogg_blob(
 
     return ogg_file_blob_array, attrs
 
-def create_index_zarr(ogg_file_blob_array: np.ndarray, zarr_original_audio_group: zarr.Group):
+def _create_index_zarr(ogg_file_blob_array: np.ndarray, zarr_original_audio_group: zarr.Group):
     """
     Speicheroptimiertes Parsen und Speichern von Ogg-Page-Indexdaten in Zarr-Gruppe.
     Die Indexdaten werden chunkweise direkt ins Zarr-Array 'index' geschrieben.
