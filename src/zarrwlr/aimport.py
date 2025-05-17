@@ -315,6 +315,7 @@ Ab dieser Stelle mit try arbeiten, um Teile der Anlegung der neuen Daten bei Feh
     # 5) Create array, decode/encode file and import byte blob
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
     # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
+Das ist schon zusammen gefasst. Aktualisieren:
     create_index_zarr(import_audio_to_ogg_blob(zarr_original_audio_group, file),
                       zarr_original_audio_group)
 
