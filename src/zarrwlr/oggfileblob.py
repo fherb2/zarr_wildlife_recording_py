@@ -17,7 +17,7 @@ OGG_MAX_PAGE_SIZE = 65536
 # get the module logger   
 logger = logging.getLogger(__name__)
 
-def get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
+def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
     """
     Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
     
@@ -51,6 +51,8 @@ def get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
 
     else:
         raise NotImplementedError(f"Unsupported codec: {target_codec}")
+
+Eigentlich kann man im Import auch das Erstellen des Indexes dazu zählen: Evtl: Besser strukturieren.
 
 def import_audio_to_ogg_blob( 
                          original_audio_grp: zarr.Group,
@@ -105,7 +107,7 @@ def import_audio_to_ogg_blob(
 
 
     original_rate, original_sample_format, original_is_opus, bit_rate, nb_channels = get_source_params(audio_file)
-    target_sample_format = get_ffmpeg_sample_fmt(original_sample_format, 'opus' if original_is_opus else 'flac')
+    target_sample_format = _get_ffmpeg_sample_fmt(original_sample_format, 'opus' if original_is_opus else 'flac')
 
     # In case, the target codec is 'opus', a lossy compress format:
     # 
