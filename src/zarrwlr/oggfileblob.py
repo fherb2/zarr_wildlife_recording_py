@@ -8,6 +8,9 @@ from pathlib import Path
 import logging
 import json
 from .types import AudioFileBaseFeatures
+from .utils import file_size
+from .config import Config
+from .exceptions import OggImportError
 
 OGG_PAGE_HEADER_SIZE = 27
 OGG_MAX_PAGE_SIZE = 65536
@@ -50,9 +53,10 @@ def get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
     else:
         raise NotImplementedError(f"Unsupported codec: {target_codec}")
 
-
 def import_audio_to_ogg_blob( 
+                         original_audio_grp: zarr.Group,
                          audio_file: str|Path, 
+                         audio_file_blob_array_name: str = "ogg_file_blob",
                          target_codec:str = 'flac', # "flac" or "opus"
                          flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
                                                           # data; higher values does not really reduce 
@@ -60,18 +64,25 @@ def import_audio_to_ogg_blob(
                                                           # Note:
                                                           # The highest values can produce more data
                                                           # than lower values. '12' as maximum must not
-                                                          # be the best compression. Check ist: More than
+                                                          # be the best compression. Check it: More than
                                                           # 4 is not really less memory consumption but
                                                           # wasted time and energy.
-                         opus_bitrate:str = '160k',
-                         temp_dir="/tmp") -> tuple[Path, float, str]:
+                         opus_bitrate:str = '160k', # formatted as used in ffmpeg
+                         temp_dir="/tmp",
+                         chunks:int = Config.original_audio_chunk_size,
+                         chunks_per_shard:int = Config.original_audio_chunks_per_shard
+                         ) -> zarr.Array:
     """
     Konvertiert eine Audiodatei in einen Ogg-Container mit FLAC oder Opus.
+    Schreibt auch alle notwendigen Attribute, jedoch erzeugt es keinen Index.
     - Unterstützt Ultraschallmodus: PCM-Daten bleiben, Zeitbasis wird manipuliert
-    - Rückgabe: Pfad zur Ogg-Datei, Faktor Original-Samplingrate / gespeicherte samplingrate
+    - Rückgabe: Dieses Blob-Array (kann dann gleich zum indizieren genutzt werden).
 
     Bisher wird nur ein Audio-Stream unterstützt. Jedoch mit beliebig vielen Kanälen.
     """
+
+    # TODO: Add OggImportError-Exceptions in case of errors. This can be used to remove 
+    # data of a started importing!
 
     assert target_codec in ('flac', 'opus') 
     assert (flac_compression_level >= 0) and (flac_compression_level <= 12)
@@ -81,7 +92,7 @@ def import_audio_to_ogg_blob(
     def get_source_params(input_file: Path) -> tuple[int, str, bool]:
         cmd = [
             "ffprobe", "-v", "error", "-select_streams", "a:0",
-            "-show_entries", "stream=sample_rate:stream=codec_name:stream:sample_fmt",
+            "-show_entries", "stream=sample_rate:stream=codec_name:stream:sample_fmt,bit_rate,channels",
             "-of", "json", str(input_file)
         ]
         out = subprocess.check_output(args=cmd)
@@ -89,10 +100,12 @@ def import_audio_to_ogg_blob(
         sampling_rate = int(info['streams'][0]['sample_rate'])
         is_opus = info['streams'][0]['codec_name'] == "opus"
         sample_format = info['streams'][0]['sample_fmt']
-        return sampling_rate, sample_format, is_opus
+        bit_rate = info['streams'][0]['bit_rate']
+        nb_channels = info['streams'][0]['channels']
+        return sampling_rate, sample_format, is_opus, bit_rate, nb_channels
 
 
-    original_rate, original_sample_format, original_is_opus = get_source_params(audio_file)
+    original_rate, original_sample_format, original_is_opus, bit_rate, nb_channels = get_source_params(audio_file)
     target_sample_format = get_ffmpeg_sample_fmt(original_sample_format, 'opus' if original_is_opus else 'flac')
 
     # In case, the target codec is 'opus', a lossy compress format:
@@ -116,6 +129,7 @@ def import_audio_to_ogg_blob(
 
     if target_codec == 'opus' and original_is_opus and not is_ultrasonic:
         # copy opus encoded data directly into ogg.opus 
+        opus_bitrate = f"{int(bit_rate / 1000.0)}k"
         subprocess.run([
             "ffmpeg", "-y", "-i", str(audio_file),
             "-c", "copy", "-sample_fmt", target_sample_format,
@@ -138,49 +152,76 @@ def import_audio_to_ogg_blob(
         ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
         ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
     else:
-        NotImplementedError(f"Target codec {target_codec} is not (yet) implemented.")
+        raise NotImplementedError(f"Target codec {target_codec} is not (yet) implemented.")
 
     ffmpeg_cmd += ["-sample_fmt", target_sample_format, "-f", "ogg", str(tmp_file)]
 
+    # start encoding into temp file and wait until finished
     subprocess.run(ffmpeg_cmd, check=True)
 
-    An dieser Stelle ist der file_blob erst mal im temporären File und noch nicht in der Datenbank.
-    Das wäre hier jetzt die richtige Stelle.
-    
-    file_blob_parameters: Es müssen die Parameter des im File-Blob gespeicherten Inhalts auch abgelegt werden:
-    Diese werden teilweise beim dekodieren benötigt!
+    # Create the file blob array
+    tmp_file_byte_size = file_size(tmp_file)
+    ogg_file_blob_array = original_audio_grp.create_array(
+            name            = audio_file_blob_array_name,
+            shape           = tmp_file_byte_size,
+            chunks          = (chunks,),
+            shards          = (chunks_per_shard * chunks,),
+            dtype           = np.uint8,
+            overwrite       = True,
+        )
 
-    return tmp_file, sampling_rescale_factor, target_codec
+    # copy tmp-file data into the array and remove the temp file
+    with open(tmp_file, "rb") as f:
+        for offset in range(0, tmp_file_byte_size, chunks):
+            buffer = f.read(chunks)
+            ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
+    tmp_file.unlink()
 
-def decode_ogg_bytes_to_pcm(ogg_bytes: bytes, sampling_rate: int, channels: int = 1, dtype=np.int16):
-    cmd = [
-        "ffmpeg",
-        "-hide_banner", "-loglevel", "error",
-        "-f", "ogg",
-        "-i", "pipe:0",
-        "-f", "s16le" if dtype == np.int16 else "f32le",
-        "-acodec", "pcm_s16le" if dtype == np.int16 else "pcm_f32le",
-        "-ac", str(channels),
-        "-ar", str(sampling_rate),
-        "pipe:1"
-    ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    pcm_bytes, _ = proc.communicate(ogg_bytes)
+    # add encoding attributes to this array
+    attrs = {
+            "container_type": "ogg",
+            "codec": target_codec,
+            "nb_channels": nb_channels,
+            }
+    if target_codec == "opus":
+        attrs.update({
+            "opus_bitrate": opus_bitrate,
+            "is_ultrasonic": is_ultrasonic,
+            "sampling_rescale_factor": sampling_rescale_factor,
+            })
+    elif target_codec == "flac":
+            attrs["compression_level"] = flac_compression_level
+    else:
+        raise RuntimeError("Unbekannter Codec-Zweig erreicht – dieser Fall ist ein Programmierfehler.")
+    ogg_file_blob_array.attrs.update(attrs)
 
-    pcm_array = np.frombuffer(pcm_bytes, dtype=dtype)
-    return pcm_array
+    return ogg_file_blob_array, attrs
 
-def parse_ogg_pages_from_array(data: np.ndarray):
+def create_index_zarr(ogg_file_blob_array: np.ndarray, zarr_original_audio_group: zarr.Group):
     """
-    Parsen von Ogg Pages direkt aus einem np.uint8 Array (z.B. Zarr-Blob).
-    Gibt Liste von (offset, granule_pos) zurück.
+    Speicheroptimiertes Parsen und Speichern von Ogg-Page-Indexdaten in Zarr-Gruppe.
+    Die Indexdaten werden chunkweise direkt ins Zarr-Array 'index' geschrieben.
     """
-    offset = 0
+    data = ogg_file_blob_array
     data_len = data.shape[0]
-    entries = []
+    offset = 0
+
+    chunk_entries = []
+    max_entries_per_chunk = 65536  # entspricht ~1MB RAM
+
+    # Vorab leeres Zarr-Array mit großzügiger Maxshape
+    index_zarr = zarr_original_audio_group.create_array(
+        name="ogg_page_index",
+        shape=(0, 2),
+        chunks=(max_entries_per_chunk, 2),
+        dtype=np.uint64,
+        maxshape=(None, 2),
+        overwrite=True
+    )
+
+    total_entries = 0
 
     while offset + OGG_PAGE_HEADER_SIZE < data_len:
-        # Prüfe auf OggS Sync
         if not np.array_equal(data[offset:offset+4], np.frombuffer(b'OggS', dtype=np.uint8)):
             offset += 1
             continue
@@ -189,82 +230,102 @@ def parse_ogg_pages_from_array(data: np.ndarray):
         granule_pos = struct.unpack_from('<Q', header.tobytes(), 6)[0]
         segment_count = header[26]
 
-        # Segment-Tabelle lesen
         seg_table_start = offset + OGG_PAGE_HEADER_SIZE
         seg_table_end = seg_table_start + segment_count
         if seg_table_end > data_len:
-            break
-
+            raise OggImportError("Data not parsable during index creation.")
+        
         segment_table = data[seg_table_start:seg_table_end]
         page_body_size = int(np.sum(segment_table))
 
         page_size = OGG_PAGE_HEADER_SIZE + segment_count + page_body_size
         if offset + page_size > data_len:
-            break
+            raise OggImportError("Data not parsable during index creation.")
 
-        entries.append((offset, granule_pos))
+        chunk_entries.append((offset, granule_pos))
         offset += page_size
 
-    return np.array(entries, dtype=np.uint64)  # shape (N, 2)
+        if len(chunk_entries) >= max_entries_per_chunk:
+            chunk_np = np.array(chunk_entries, dtype=np.uint64)
+            index_zarr.resize(total_entries + chunk_np.shape[0], axis=0)
+            index_zarr[total_entries : total_entries + chunk_np.shape[0], :] = chunk_np
+            total_entries += chunk_np.shape[0]
+            chunk_entries = []
 
-def create_index_zarr(ogg_file_blob_array: np.ndarray, zarr_original_audio_group: zarr.Group): # zarr_original_audio_group must be open with mode = 'r+'
+    if chunk_entries:
+        chunk_np = np.array(chunk_entries, dtype=np.uint64)
+        index_zarr.resize(total_entries + chunk_np.shape[0], axis=0)
+        index_zarr[total_entries : total_entries + chunk_np.shape[0], :] = chunk_np
+        total_entries += chunk_np.shape[0]
+
+    return index_zarr
+
+def extract_audio_segment_from_blob(
+                                        ogg_file_blob_array,   # zarr.Array (uint8)
+                                        index_zarr,            # zarr.Array, shape (N, 2), dtype=uint64
+                                        start_sample: int,
+                                        last_sample: int,
+                                        sample_rate: int,
+                                        channels: int,
+                                        dtype: np.dtype = np.int16
+                                    ) -> np.ndarray:
     """
-    Parst Ogg-Pages aus ogg_file_blob_array und speichert Index als 'index' in Zarr-Gruppe.
+    Extrahiert ein PCM-Segment (Samples) aus einem Ogg-Zarr-Blob anhand des Index.
+    Gibt ein (samples, channels)-Array zurück (dtype = z.B. int16 oder float32).
     """
-    index_array = parse_ogg_pages_from_array(ogg_file_blob_array)
-    # shape (N, 2), dtype uint64 — Spalten: [file_offset, granule_position]
-    with zarr_original_audio_group.create_array(    name="index",
-                                                    dtype="uint64",
-                                                    shape=index_array.shape,
-                                                    chunks=(min(1024, index_array.shape[0]), 2),
-                                                    overwrite=True
-                                                ) as index:
-        index[:,:] = index_array
-    print(f"Index mit {index_array.shape[0]} Einträgen gespeichert.")
 
-def find_sample_range_in_index(start_sample: int, end_sample: int, index: np.ndarray):
-    """
-    Gibt den Start-Offset, End-Offset (im ogg_blob) und relative Sample-Range im dekodierten Signal zurück.
-    """
-    granule_positions = index[:, 1]
-    file_offsets = index[:, 0]
+    if start_sample > last_sample:
+        raise ValueError("start_sample darf nicht größer als last_sample sein.")
 
-    # Suche Position der letzten Page VOR start_sample
-    start_pos = np.searchsorted(granule_positions, start_sample, side='right') - 1
-    end_pos = np.searchsorted(granule_positions, end_sample, side='right') - 1
+    # 1. Suche Start- und Endposition im Index (sample-basiert via granule_position)
+    granules = index_zarr[:, 1][:]
+    start_idx = np.searchsorted(granules, start_sample, side="left")
 
-    if start_pos < 0 or end_pos < 0:
-        raise ValueError("Samplebereich liegt vor Beginn des Index")
+    if start_idx >= len(granules):
+        raise ValueError("Startposition liegt hinter letzter Index-Granule.")
 
-    # Ogg-Bytebereiche
-    pages_start_position = int(file_offsets[start_pos])
-    pages_end_position = int(file_offsets[end_pos])
+    end_idx = np.searchsorted(granules, last_sample, side="right") - 1
+    if end_idx < start_idx:
+        raise ValueError("Ungültiger Bereich im Index.")
 
-    # Absoluter Start in Samples
-    page_start_sample = int(granule_positions[start_pos])
+    # 2. Bestimme Byte-Offsets im Ogg-Blob
+    start_byte = int(index_zarr[start_idx, 0])
+    end_byte = (
+        int(index_zarr[end_idx + 1, 0]) if end_idx + 1 < len(index_zarr) else ogg_file_blob_array.shape[0]
+    )
+    actual_start_sample = int(index_zarr[start_idx, 1])
 
-    # Relative Sample-Offsets im dekodierten Array
-    relative_start = start_sample - page_start_sample
-    relative_end = end_sample - page_start_sample
+    # 3. Lade nur den betroffenen Ausschnitt aus dem Blob
+    ogg_slice = ogg_file_blob_array[start_byte:end_byte][:].tobytes()
 
-    return pages_start_position, pages_end_position, relative_start, relative_end
+    # 4. FFMPEG aufrufen, um OGG-Daten zu dekodieren
+    cmd = [
+        "ffmpeg",
+        "-hide_banner", "-loglevel", "error",
+        "-f", "ogg",
+        "-i", "pipe:0",
+        "-ac", str(channels),
+        "-ar", str(sample_rate),
+        "-f", "s16le" if dtype == np.int16 else "f32le",
+        "pipe:1"
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    pcm_bytes, _ = proc.communicate(ogg_slice)
 
-def get_pcm_array(zarr_original_audio_group: zarr.Group, start_sample: int, end_sample: int):
-    
-        index = zarr_original_audio_group["index"] # -> richtig öffnen, damit es als numpy-Array interpretiert werden kann
-        pages_start_position, pages_end_position, relative_start, relative_end = find_sample_range_in_index(start_sample, end_sample, index)
-        
-        ogg_file_blob_array = zarr_original_audio_group["ogg_file_blob"] # -> richtig öffnen, damit es als numpy-Array interpretiert werden kann
-        ogg_segment = ogg_file_blob_array[pages_start_position : pages_end_position + OGG_MAX_PAGE_SIZE] # OGG_MAX_PAGE_SIZE ist sicherheitsabstand, da wir die ganze Page brauchen
-        
-        # Wir gehen davon aus, dass genau ein Stream (Index 0 in AudioFileBaseFeatures._..._PER STREAM) mit 1 oder 2 Kanälen (oder mehr) vorhanden ist.
-        Das muss geändert werden: Nicht die original-File-Features, sondern die, mit denen der file blob erstellt wurde!
-        base_features: AudioFileBaseFeatures = zarr_original_audio_group.attrs["base_features"]
-        channels: int = base_features.NB_STREAMS # unklar of steareo 2 Streams sind oder 2 Channels -> noch klären!
-        sampling_rate: int = base_features.SAMPLING_RATE_PER_STREAM[0]
-        dtype = base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE
-        if base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR:
-            raise NotImplementedError("Decoding of planar sample formats is not yet implemented.")
-        
-        pcm = decode_ogg_bytes_to_pcm(ogg_segment.tobytes(), sampling_rate=sampling_rate, channels=channels, dtype=dtype)[relative_start * channels : relative_end * channels]
-        return pcm
+    # 5. PCM-Daten als NumPy-Array interpretieren
+    samples = np.frombuffer(pcm_bytes, dtype=dtype)
+    if samples.size % channels != 0:
+        raise ValueError("Fehlerhafte Kanalanzahl im dekodierten PCM-Strom.")
+    samples = samples.reshape(-1, channels)
+
+    # 6. Zielbereich (Samples) aus Gesamtergebnis extrahieren
+    rel_start = start_sample - actual_start_sample
+    rel_end = last_sample - actual_start_sample + 1  # inklusiv
+
+    if rel_start < 0 or rel_end > samples.shape[0]:
+        raise ValueError(
+            f"Granule-Offset außerhalb des dekodierten Bereichs: {rel_start=}, {rel_end=}, shape={samples.shape}"
+        )
+
+    return samples[rel_start:rel_end]
+

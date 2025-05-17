@@ -336,7 +336,7 @@ def import_original_audio_file(file: str|Path,
             buffer = f.read(Config.original_audio_chunk_size)
             ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
             
-    Achtung: Bis   hiernoch die Metadaten für den gespeicherten Stream erzeugen und ablegen (bzw. in oggfileblob.py)
+    Achtung: Bis   hier noch die Metadaten für den gespeicherten Stream erzeugen und ablegen (bzw. in oggfileblob.py)
             
 
 

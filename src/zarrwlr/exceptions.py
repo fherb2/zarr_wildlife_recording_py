@@ -7,6 +7,11 @@ class Doublet(Exception):
     def __init__(self, message: str = "Doublet error."):
         super().__init__(message)
 
+class OggImportError(Exception):
+    """Error during an import into an ogg container as file blob"""
+    def __init__(self, message: str = "Error during importing an audio file into an ogg container blob as Zarr array."):
+        super().__init__(message)
+
 
 class ZarrComponentVersionError(BaseZarrError):
     """Error of a special component version inside a Zarr database"""
