@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 import logging
 import json
-from .types import AudioFileBaseFeatures
 from .utils import file_size
 from .config import Config
 from .exceptions import OggImportError

@@ -12,7 +12,7 @@ from .utils import next_numeric_group_name, file_size
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
-from .oggfileblob import convert_audio_to_ogg
+from .oggfileblob import import_audio_to_ogg_blob, create_index_zarr
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -298,6 +298,9 @@ def import_original_audio_file(file: str|Path,
 
     # 4) Calculate the next free 'group-number'.
     new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
+
+Ab dieser Stelle mit try arbeiten, um Teile der Anlegung der neuen Daten bei Fehlern wieder zu entfernen! 
+
     new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
     # add a version attribute to this group
     new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
@@ -306,47 +309,14 @@ def import_original_audio_file(file: str|Path,
     # These data specify the source and not the following file blob!
     new_original_audio_grp.attrs["type"]                    = "original_audio_file"
     new_original_audio_grp.attrs["encoding"]                = target_codec
-    new_original_audio_grp.attrs["sampling_base_scaling"]   = sampling_base_scaling
     new_original_audio_grp.attrs["base_features"]           = base_features
     new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
 
     # 5) Create array, decode/encode file and import byte blob
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
-    
-    
-    Vielleicht ab hier in oggfileblob implementieren:
-
-    
-    # do conversation to ogg.flac or ogg.opus; scale sampling in case of opus and >48kS/s
-    tmp_file, sampling_base_scaling, target_codec = convert_audio_to_ogg(file, target_codec=target_codec)
-
-    tmp_file_byte_size = file_size(tmp_file)
-
-    ogg_file_blob_array = new_original_audio_grp.create_array(
-        name            = "ogg_file_blob",
-        shape           = tmp_file_byte_size,
-        chunks          = (Config.original_audio_chunk_size,),
-        shards          = (Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size,),
-        dtype           = np.uint8,
-        overwrite       = True,
-    )
-
-    with open(tmp_file, "rb") as f:
-        for offset in range(0, tmp_file_byte_size, Config.original_audio_chunk_size):
-            buffer = f.read(Config.original_audio_chunk_size)
-            ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
-            
-    Achtung: Bis   hier noch die Metadaten für den gespeicherten Stream erzeugen und ablegen (bzw. in oggfileblob.py)
-            
-
-
-
-
     # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
-
-
-
-    ----------- bis hier
+    create_index_zarr(import_audio_to_ogg_blob(zarr_original_audio_group, file),
+                      zarr_original_audio_group)
 
     # 7) We can finally save the attribute "finally_created" with True
     new_original_audio_grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
