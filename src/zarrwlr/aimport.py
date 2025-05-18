@@ -8,11 +8,12 @@ import json
 import yaml
 from mutagen import File as MutagenFile
 import zarr
-from .utils import next_numeric_group_name, file_size
+from .utils import next_numeric_group_name, remove_zarr_group_recursive
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
-from .oggfileblob import import_audio_to_blob
+from .oggfileblob import import_audio_to_blob as ogg_import_audio_to_blob
+from .oggfileblob import create_index as ogg_create_index
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ def _check_ffmpeg_tools():
 
 # We do this check during import:
 _check_ffmpeg_tools()
+
+AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array"
 
 def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None = None):
 
@@ -62,7 +65,7 @@ def check_if_original_audio_group(group:zarr.Group) -> bool:
              and (group.attrs["magic_id"] == Config.original_audio_group_magic_id) \
              and ("version" in group.attrs)
     if grp_ok and not (group.attrs["version"] == Config.original_audio_group_version):
-        raise ZarrComponentVersionError(f"Original audio group has version {group.attrs["version"]} but current zarrwlr needs version {Config.original_audio_group_version} for this group. Please, upgrade group to get access.")
+        raise ZarrComponentVersionError(f"Original audio group has version {group.attrs['version']} but current zarrwlr needs version {Config.original_audio_group_version} for this group. Please, upgrade group to get access.")
     elif grp_ok:
         return True
     raise ZarrGroupMismatch(f"The group '{group}' is not an original audio group.")
@@ -258,10 +261,24 @@ class FileMeta:
         
 
 
-def import_original_audio_file(file: str|Path, 
-                      zarr_original_audio_group: zarr.Group,
-                      target_codec:str = 'flac'
-                      ):
+def import_original_audio_file(
+                    file: str|Path, 
+                    zarr_original_audio_group: zarr.Group,
+                    target_codec:str = 'flac',
+                    flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
+                                                        # data; higher values does not really reduce 
+                                                        # data size but need more time and energy. 
+                                                        # Note:
+                                                        # The highest values can produce more data
+                                                        # than lower values. '12' as maximum must not
+                                                        # be the best compression. Check it: More than
+                                                        # 4 is not really less memory consumption but
+                                                        # wasted time and energy.
+                    opus_bitrate:int = 160_000, # bit per second
+                    temp_dir="/tmp",
+                    chunk_size:int = Config.original_audio_chunk_size
+                    ):
+
     # Analyze File-/Audio-/Codec-Type: we need 
     #   original file name
     #   original file size
@@ -299,24 +316,47 @@ def import_original_audio_file(file: str|Path,
     # 4) Calculate the next free 'group-number'.
     new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
 
-#Ab dieser Stelle mit try arbeiten, um Teile der Anlegung der neuen Daten bei Fehlern wieder zu entfernen! 
+    created = False
+    try:
+        new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
+        created = True
 
-    new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
-    # add a version attribute to this group
-    new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
+        # add a version attribute to this group
+        new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
 
-    # Save Original-Audio-Meta data to the group
-    # These data specify the source and not the following file blob!
-    new_original_audio_grp.attrs["type"]                    = "original_audio_file"
-    new_original_audio_grp.attrs["encoding"]                = target_codec
-    new_original_audio_grp.attrs["base_features"]           = base_features
-    new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
+        # Save Original-Audio-Meta data to the group
+        # These data specify the source and not the following file blob!
+        new_original_audio_grp.attrs["type"]                    = "original_audio_file"
+        new_original_audio_grp.attrs["encoding"]                = target_codec
+        new_original_audio_grp.attrs["base_features"]           = base_features
+        new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
 
-    # 5) Create array, decode/encode file and import byte blob
-    #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
-    # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
-    import_audio_to_blob(new_original_audio_grp, file)
+        # 5) Create array, decode/encode file and import byte blob
+        #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
+        audio_blob_array = new_original_audio_grp.create_array(
+                                    name            = AUDIO_DATA_BLOB_ARRAY_NAME,
+                                    shape           = (0,), # we append data step by step
+                                    chunks          = (Config.original_audio_chunk_size,),
+                                    shards          = (Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size,),
+                                    dtype           = np.uint8,
+                                    overwrite       = True,
+                                )
+        ogg_import_audio_to_blob(   file,
+                                    audio_blob_array,
+                                    target_codec,
+                                    flac_compression_level,
+                                    opus_bitrate,
+                                    temp_dir,
+                                    chunk_size
+                                    )
+        
+        # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
+        ogg_create_index(audio_blob_array, new_original_audio_grp)
 
-    # 7) We can finally save the attribute "finally_created" with True
-    new_original_audio_grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
+        # 7) We can finally save the attribute "finally_created" with True
+        new_original_audio_grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
 
+    except Exception:
+        if created:
+            remove_zarr_group_recursive(zarr_original_audio_group.store, new_original_audio_grp.path)
+        raise  # raise original exception

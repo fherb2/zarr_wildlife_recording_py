@@ -169,7 +169,7 @@ class OriginalAudioBlobFeatures(RestrictedDict):
                 # as: (key-name, data-type, default-value)
                 (CONTAINER_FORMAT, str, None),
                 (SAMPLING_RATE_OF_COMPRESSION, int, None),
-                (SAMPLING_RESCALE_FACTOR, float, 1.0)
+                (SAMPLING_RESCALE_FACTOR, float, 1.0),
                 (SAMPLE_FORMAT_AS_DTYPE, np.dtype, np.int16),
                 (SAMPLE_FORMAT_IS_PLANAR, bool, False),
                 (CHANNELS, int, 1)
