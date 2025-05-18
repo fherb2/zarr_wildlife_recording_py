@@ -93,24 +93,9 @@ def _import_audio_to_ogg_blob(
 
     audio_file = Path(audio_file)
 
-    def get_source_params(input_file: Path) -> tuple[int, str, bool]:
-        cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "a:0",
-            "-show_entries", "stream=sample_rate:stream=codec_name:stream:sample_fmt,bit_rate,channels",
-            "-of", "json", str(input_file)
-        ]
-        out = subprocess.check_output(args=cmd)
-        info = json.loads(out)
-        sampling_rate = int(info['streams'][0]['sample_rate'])
-        is_opus = info['streams'][0]['codec_name'] == "opus"
-        sample_format = info['streams'][0]['sample_fmt']
-        bit_rate = info['streams'][0]['bit_rate']
-        nb_channels = info['streams'][0]['channels']
-        return sampling_rate, sample_format, is_opus, bit_rate, nb_channels
-
-
-    original_rate, original_sample_format, original_is_opus, bit_rate, nb_channels = get_source_params(audio_file)
-    target_sample_format = _get_ffmpeg_sample_fmt(original_sample_format, 'opus' if original_is_opus else 'flac')
+    source_params = _get_source_params(audio_file)
+    target_sample_format = _get_ffmpeg_sample_fmt(source_params["sample_format"], 
+                                                  'opus' if source_params["is_opus"] else 'flac')
 
     # In case, the target codec is 'opus', a lossy compress format:
     # 
@@ -125,21 +110,94 @@ def _import_audio_to_ogg_blob(
     #   algorithm can interprete these as inaudible and remove all of them. To avoid this, use 'flac'
     #   or downsample the audio source to 48kS/s before.
     #   
-    sampling_rescale_factor = 1.0
-    is_ultrasonic = (target_codec == "opus") and (original_rate > 48000)
+    
 
     with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=temp_dir) as tmp_out:
         tmp_file = Path(tmp_out.name)
 
-    if target_codec == 'opus' and original_is_opus and not is_ultrasonic:
+        sampling_rescale_factor = _import_to_tempfile(  audio_file=audio_file,
+                                                        tmp_file=tmp_file,
+                                                        target_codec=target_codec,
+                                                        target_sample_format=target_sample_format,
+                                                        flac_compression_level=flac_compression_level,
+                                                        opus_bitrate=opus_bitrate
+                                                        )
+        
+        # Create the file blob array
+        tmp_file_byte_size = file_size(tmp_file)
+        ogg_file_blob_array = original_audio_grp.create_array(
+                name            = audio_file_blob_array_name,
+                shape           = tmp_file_byte_size,
+                chunks          = (chunks,),
+                shards          = (chunks_per_shard * chunks,),
+                dtype           = np.uint8,
+                overwrite       = True,
+            )
+
+        # copy tmp-file data into the array and remove the temp file
+        with open(tmp_file, "rb") as f:
+            for offset in range(0, tmp_file_byte_size, chunks):
+                buffer = f.read(chunks)
+                ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
+        tmp_file.unlink()
+
+    # add encoding attributes to this array
+    attrs = {
+            "container_type": "ogg",
+            "codec": target_codec,
+            "nb_channels": source_params["nb_channels"],
+            }
+    if target_codec == "opus":
+        attrs.update({
+            "opus_bitrate": opus_bitrate,
+            "sampling_rescale_factor": sampling_rescale_factor,
+            })
+    elif target_codec == "flac":
+            attrs["compression_level"] = flac_compression_level
+    else:
+        raise RuntimeError("Unbekannter Codec-Zweig erreicht – dieser Fall ist ein Programmierfehler.")
+    ogg_file_blob_array.attrs.update(attrs)
+
+    return ogg_file_blob_array, attrs
+
+def _get_source_params(input_file: Path) -> tuple[int, str, bool]:
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=sample_rate:stream=codec_name:stream:sample_fmt,bit_rate,channels",
+        "-of", "json", str(input_file)
+    ]
+    out = subprocess.check_output(args=cmd)
+    info = json.loads(out)
+    source_params = {
+                "sampling_rate": int(info['streams'][0]['sample_rate']),
+                "is_opus": info['streams'][0]['codec_name'] == "opus",
+                "sample_format": info['streams'][0]['sample_fmt'],
+                "bit_rate": int(info['streams'][0]['bit_rate']),
+                "nb_channels": int(info['streams'][0]['channels'])
+            }
+    return source_params
+
+def _import_to_tempfile(audio_file: Path,
+                        tmp_file: Path,
+                        source_params: dict,
+                        target_codec: str,
+                        target_sample_format: str,
+                        flac_compression_level:int,
+                        opus_bitrate: str
+                        ) -> float:
+    
+    sampling_rescale_factor = 1.0
+    is_ultrasonic = (target_codec == "opus") and (source_params["sampling_rate"] > 48000)
+
+    if target_codec == 'opus' and source_params["is_opus"] and not is_ultrasonic:
         # copy opus encoded data directly into ogg.opus 
-        opus_bitrate = f"{int(bit_rate / 1000.0)}k"
+        opus_bitrate = f"{int(source_params["bit_rate"] / 1000.0)}k"
         subprocess.run([
             "ffmpeg", "-y", "-i", str(audio_file),
             "-c", "copy", "-sample_fmt", target_sample_format,
             "-f", "ogg", str(tmp_file)
         ], check=True)
-        return tmp_file, sampling_rescale_factor, target_codec
+        return sampling_rescale_factor
 
     ffmpeg_cmd = ["ffmpeg", "-y"]   
 
@@ -147,7 +205,7 @@ def _import_audio_to_ogg_blob(
         if is_ultrasonic:
             # we interprete sampling rate as "48000" to can use opus for ultrasonic
             ffmpeg_cmd += ["-sample_rate", "48000"]
-            sampling_rescale_factor = float(original_rate) / 48000.0
+            sampling_rescale_factor = float(source_params["bit_rate"]) / 48000.0
         ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "libopus", "-b:a", opus_bitrate]
         ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
         ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
@@ -163,43 +221,7 @@ def _import_audio_to_ogg_blob(
     # start encoding into temp file and wait until finished
     subprocess.run(ffmpeg_cmd, check=True)
 
-    # Create the file blob array
-    tmp_file_byte_size = file_size(tmp_file)
-    ogg_file_blob_array = original_audio_grp.create_array(
-            name            = audio_file_blob_array_name,
-            shape           = tmp_file_byte_size,
-            chunks          = (chunks,),
-            shards          = (chunks_per_shard * chunks,),
-            dtype           = np.uint8,
-            overwrite       = True,
-        )
-
-    # copy tmp-file data into the array and remove the temp file
-    with open(tmp_file, "rb") as f:
-        for offset in range(0, tmp_file_byte_size, chunks):
-            buffer = f.read(chunks)
-            ogg_file_blob_array[offset : offset + len(buffer)] = np.frombuffer(buffer, dtype="u1")
-    tmp_file.unlink()
-
-    # add encoding attributes to this array
-    attrs = {
-            "container_type": "ogg",
-            "codec": target_codec,
-            "nb_channels": nb_channels,
-            }
-    if target_codec == "opus":
-        attrs.update({
-            "opus_bitrate": opus_bitrate,
-            "is_ultrasonic": is_ultrasonic,
-            "sampling_rescale_factor": sampling_rescale_factor,
-            })
-    elif target_codec == "flac":
-            attrs["compression_level"] = flac_compression_level
-    else:
-        raise RuntimeError("Unbekannter Codec-Zweig erreicht – dieser Fall ist ein Programmierfehler.")
-    ogg_file_blob_array.attrs.update(attrs)
-
-    return ogg_file_blob_array, attrs
+    return sampling_rescale_factor
 
 def _create_index_zarr(ogg_file_blob_array: np.ndarray, zarr_original_audio_group: zarr.Group):
     """

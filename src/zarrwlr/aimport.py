@@ -12,7 +12,7 @@ from .utils import next_numeric_group_name, file_size
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
-from .oggfileblob import import_audio_to_ogg_blob, create_index_zarr
+from .oggfileblob import import_audio_to_blob
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -299,7 +299,7 @@ def import_original_audio_file(file: str|Path,
     # 4) Calculate the next free 'group-number'.
     new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
 
-Ab dieser Stelle mit try arbeiten, um Teile der Anlegung der neuen Daten bei Fehlern wieder zu entfernen! 
+#Ab dieser Stelle mit try arbeiten, um Teile der Anlegung der neuen Daten bei Fehlern wieder zu entfernen! 
 
     new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
     # add a version attribute to this group
@@ -315,9 +315,7 @@ Ab dieser Stelle mit try arbeiten, um Teile der Anlegung der neuen Daten bei Feh
     # 5) Create array, decode/encode file and import byte blob
     #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
     # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
-Das ist schon zusammen gefasst. Aktualisieren:
-    create_index_zarr(import_audio_to_ogg_blob(zarr_original_audio_group, file),
-                      zarr_original_audio_group)
+    import_audio_to_blob(new_original_audio_grp, file)
 
     # 7) We can finally save the attribute "finally_created" with True
     new_original_audio_grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
