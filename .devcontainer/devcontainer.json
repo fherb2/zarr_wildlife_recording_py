@@ -6,7 +6,8 @@
     "name": "devcontainer_ubuntu24_py311", // You should change the name, if you change the following image.
     // The image to create the container:
 
-    "image": "registry.hzdr.de/fwf/libraries/dockerfiles/devcontainers-python-cuda-imageprocessing/devcontainer_py3.11:rel-1.0.0-e1f654",
+    "image": "registry.hzdr.de/fwf/libraries/dockerfiles/devcontainers-python-cuda-imageprocessing/zarrwlr_dev_ub22_py311:rel-1.0.0-2183f2",
+    // alt: "registry.hzdr.de/fwf/libraries/dockerfiles/devcontainers-python-cuda-imageprocessing/devcontainer_py3.11:rel-1.0.0-e1f654",
 
 
     // see: https://code.visualstudio.com/remote/advancedcontainers/start-processes
@@ -250,7 +251,7 @@
 
               ],
               "settings": {
-                 "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+                 "python.defaultInterpreterPath": "/home/jovyan/.venv3.11/bin/python",
                  "autoDocstring.docstringFormat": "numpy",
                  "autoDocstring.generateDocstringOnEnter": true
 

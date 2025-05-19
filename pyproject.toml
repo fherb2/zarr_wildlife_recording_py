@@ -13,6 +13,8 @@ mutagen = "^1.47.0"
 rich = "^14.0.0"
 zarr = "^3.0.7"
 pyyaml = "^6.0.2"
+av = "^14.4.0"
+soundfile = "^0.13.1"
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.6.1"
@@ -31,6 +33,11 @@ mkdocs-material = "^9.6.12"
 mkdocstrings = {extras = ["python"], version = "^0.29.1"}
 pymdown-extensions = "^10.15"
 mkdocs-section-index = "^0.3.10"
+
+[tool.poetry-auto-export]
+output = "requirements.txt"
+without_hashes = true
+without = []  # Leer = exportiere alles, auch dev
 
 [build-system]
 requires = ["poetry-core"]
