@@ -155,10 +155,6 @@ def demo_complete_workflow():
 
 
 
-
-
-
-
 # Beispiel für einen direkten Anwendungsfall
 
 def beispiel_anwendungsfall():

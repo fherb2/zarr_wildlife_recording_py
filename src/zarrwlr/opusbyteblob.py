@@ -7,6 +7,7 @@ import io
 from concurrent.futures import ThreadPoolExecutor
 
 
+
 class OggOpusIndexer:
     """Indexer für Ogg-Container mit Opus-Codec"""
     

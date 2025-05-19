@@ -14,6 +14,8 @@ from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionEr
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
 from .oggfileblob import import_audio_to_blob as ogg_import_audio_to_blob
 from .oggfileblob import create_index as ogg_create_index
+from .flacbyteblob import FLACIndexer
+from .opusbyteblob import OggOpusIndexer
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -42,7 +44,6 @@ def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None
     def initialize_group(grp:zarr.Group):
         grp.attrs["magic_id"] = Config.original_audio_group_magic_id
         grp.attrs["version"]  = Config.original_audio_group_version
-        grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
 
     if group_path:
         if group_path in root:
@@ -51,23 +52,28 @@ def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None
             return
         else:
             # create this group
-            group = root.create_group(group_path)
-            initialize_group(group)
+            created = False
+            try:
+                group = root.create_group(group_path)
+                created = True
+                initialize_group(group)
+            except Exception:
+                if created:
+                    remove_zarr_group_recursive(root.store, group.path)
+                raise  # raise original exception
     else:
         # root is this group
         group = root
         check_if_original_audio_group(group = root[group_path])
 
-def check_if_original_audio_group(group:zarr.Group) -> bool:
-    if "finally_created" not in group.attrs:
-        raise ZarrComponentIncomplete(f"Incomplete initialized or foreign group: {group}. Either given group is not an 'original audio group' or group initialization was broken.")
+def check_if_original_audio_group(group:zarr.Group):
     grp_ok =     ("magic_id" in group.attrs) \
              and (group.attrs["magic_id"] == Config.original_audio_group_magic_id) \
              and ("version" in group.attrs)
     if grp_ok and not (group.attrs["version"] == Config.original_audio_group_version):
         raise ZarrComponentVersionError(f"Original audio group has version {group.attrs['version']} but current zarrwlr needs version {Config.original_audio_group_version} for this group. Please, upgrade group to get access.")
     elif grp_ok:
-        return True
+        return
     raise ZarrGroupMismatch(f"The group '{group}' is not an original audio group.")
 
 def audio_codec_compression(codec_name: str) -> AudioCompression:
@@ -264,7 +270,7 @@ class FileMeta:
 def import_original_audio_file(
                     file: str|Path, 
                     zarr_original_audio_group: zarr.Group,
-                    target_codec:str = 'flac',
+                    target_codec:str = 'flac', # 'flac' or 'opus'
                     flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
                                                         # data; higher values does not really reduce 
                                                         # data size but need more time and energy. 
@@ -295,6 +301,8 @@ def import_original_audio_file(
     # Create Index and put it into array
     # Put all meta data as attributes.
     # Set attribute 'import_finalized' with true. Thats the marker for a completed import. 
+    
+    assert (target_codec == 'flac') or (target_codec == 'opus')
 
     # 0) Check if group is original audio file group and has the right version
     check_if_original_audio_group(zarr_original_audio_group)
@@ -316,6 +324,7 @@ def import_original_audio_file(
     # 4) Calculate the next free 'group-number'.
     new_audio_group_name = next_numeric_group_name(zarr_group=zarr_original_audio_group)
 
+    # 5) Create numeric group for the new audio
     created = False
     try:
         new_original_audio_grp = zarr_original_audio_group.require_group(new_audio_group_name)
@@ -331,7 +340,7 @@ def import_original_audio_file(
         new_original_audio_grp.attrs["base_features"]           = base_features
         new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
 
-        # 5) Create array, decode/encode file and import byte blob
+        # 6) Create array, decode/encode file and import byte blob
         #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
         audio_blob_array = new_original_audio_grp.create_array(
                                     name            = AUDIO_DATA_BLOB_ARRAY_NAME,
@@ -341,6 +350,8 @@ def import_original_audio_file(
                                     dtype           = np.uint8,
                                     overwrite       = True,
                                 )
+            
+        Ersetzen: Direkt aus oggfileblob.py nach hierher unter den neuen Bedingungen übernehmen.
         ogg_import_audio_to_blob(   file,
                                     audio_blob_array,
                                     target_codec,
@@ -350,13 +361,13 @@ def import_original_audio_file(
                                     chunk_size
                                     )
         
-        # 6) Create and save index inside the group (as array, not attribute since the size of structured data)
+        # 7) Create and save index inside the group (as array, not attribute since the size of structured data)
+        Ersetzen: Den passenden Indexer aufrufen.
         ogg_create_index(audio_blob_array, new_original_audio_grp)
 
-        # 7) We can finally save the attribute "finally_created" with True
-        new_original_audio_grp.attrs["finally_created"] = True # Marker that the creation was completely finalized.
 
     except Exception:
+        # Full-Rollback: In case of any exception: we remove the group with all content.
         if created:
             remove_zarr_group_recursive(zarr_original_audio_group.store, new_original_audio_grp.path)
         raise  # raise original exception
