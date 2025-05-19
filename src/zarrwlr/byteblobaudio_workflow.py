@@ -23,6 +23,8 @@ def create_zarr_store_with_audio(audio_file_path, output_zarr_path, compress_for
     Returns:
         Pfad zum erstellten Zarr-Store
     """
+
+Erledigt:
     # Erstelle Zarr-Store
     store = zarr.open(output_zarr_path, mode='w')
     
@@ -73,6 +75,7 @@ def create_zarr_store_with_audio(audio_file_path, output_zarr_path, compress_for
     audio_array.attrs['channels'] = channels
     audio_array.attrs['format'] = compress_format
     
+
     # Index erstellen
     if compress_format == 'flac':
         from indexing_code import FLACIndexer

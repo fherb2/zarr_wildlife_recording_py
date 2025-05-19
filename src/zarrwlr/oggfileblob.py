@@ -23,45 +23,7 @@ STD_FLAC_COMPRESSION_LEVEL = 4  # 0...12; 4 is a really good value: fast and low
                                 # 4 is not really less memory consumption but
                                 # wasted time and energy.
 STD_OPUS_BITRATE = 160_000      # bit per second
-STD_TEMP_DIR = "/tmp"
 
-# get the module logger   
-logger = logging.getLogger(__name__)
-
-def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
-    """
-    Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
-    
-    Args:
-        source_sample_fmt (str): Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
-        target_codec (str): "flac" oder "opus"
-    
-    Returns:
-        str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
-    """
-
-    # Mappings nach Fähigkeiten der Codecs
-    flac_supported = ["s8", "s12", "s16", "s24", "s32"]
-    opus_supported = ["s16", "s24", "flt"]
-
-    # Auflösen von planar zu packed
-    normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
-
-    if target_codec == "flac":
-        if normalized_fmt in flac_supported:
-            return normalized_fmt
-        # fallback
-        return "s32"
-
-    elif target_codec == "opus":
-        # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
-        if normalized_fmt in opus_supported:
-            return normalized_fmt
-        # fallback auf float oder s16
-        return "flt" if normalized_fmt.startswith("f") else "s16"
-
-    else:
-        raise NotImplementedError(f"Unsupported codec: {target_codec}")
 
 def import_audio_to_blob( 
                          audio_file: str|pathlib.Path, 
@@ -142,23 +104,6 @@ def import_audio_to_blob(
         raise RuntimeError("Unbekannter Codec-Zweig erreicht – dieser Fall ist ein Programmierfehler.")
     audio_file_blob_array.attrs.update(attrs)
 
-def _get_source_params(input_file: pathlib.Path) -> dict:
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "a:0",
-        "-show_entries", "stream=sample_rate:stream=codec_name:stream=sample_fmt:stream=bit_rate:stream=channels",
-        "-of", "json", str(input_file)
-    ]
-    out = subprocess.check_output(args=cmd)
-    info = json.loads(out)
-    source_params = {
-                "sampling_rate": int(info['streams'][0]['sample_rate']) if 'sample_rate' in info['streams'][0] else None,
-                "is_opus": info['streams'][0]['codec_name'] == "opus",
-                "sample_format": info['streams'][0]['sample_fmt'],
-                "bit_rate": int(info['streams'][0]['bit_rate']) if 'bit_rate' in info['streams'][0] else None,
-                "nb_channels": int(info['streams'][0]['channels'])
-            }
-    return source_params
-
 def _import_to_tempfile(audio_file: pathlib.Path,
                         tmp_file: pathlib.Path,
                         source_params: dict,
@@ -214,42 +159,42 @@ def _import_to_tempfile(audio_file: pathlib.Path,
         _description_
     """
 
-    assert (target_codec == 'flac') or (target_codec == 'opus')
+    # assert (target_codec == 'flac') or (target_codec == 'opus')
 
-    opus_bitrate_str = str(int(opus_bitrate/1000))+'k'
-    sampling_rescale_factor = 1.0
-    is_ultrasonic = (target_codec == "opus") and (source_params["sampling_rate"] > 48000)
+    # opus_bitrate_str = str(int(opus_bitrate/1000))+'k'
+    # sampling_rescale_factor = 1.0
+    # is_ultrasonic = (target_codec == "opus") and (source_params["sampling_rate"] > 48000)
     
-    if target_codec == 'opus' and source_params["is_opus"] and not is_ultrasonic:
-        # copy opus encoded data directly into ogg.opus 
-        subprocess.run([
-            "ffmpeg", "-y", "-i", str(audio_file),
-            "-c", "copy", "-sample_fmt", target_sample_format,
-            "-f", "ogg", str(tmp_file)
-        ], check=True)
-        return sampling_rescale_factor
+    # if target_codec == 'opus' and source_params["is_opus"] and not is_ultrasonic:
+    #     # copy opus encoded data directly into ogg.opus 
+    #     subprocess.run([
+    #         "ffmpeg", "-y", "-i", str(audio_file),
+    #         "-c", "copy", "-sample_fmt", target_sample_format,
+    #         "-f", "ogg", str(tmp_file)
+    #     ], check=True)
+    #     return sampling_rescale_factor
 
-    ffmpeg_cmd = ["ffmpeg", "-y"]   
+    # ffmpeg_cmd = ["ffmpeg", "-y"]   
 
-    if target_codec == 'opus':
-        if is_ultrasonic:
-            # we interprete sampling rate as "48000" to can use opus for ultrasonic
-            ffmpeg_cmd += ["-sample_rate", "48000"]
-            sampling_rescale_factor = float(source_params["bit_rate"]) / 48000.0
-        ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "libopus", "-b:a", opus_bitrate_str]
-        ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
-        ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
+    # if target_codec == 'opus':
+    #     if is_ultrasonic:
+    #         # we interprete sampling rate as "48000" to can use opus for ultrasonic
+    #         ffmpeg_cmd += ["-sample_rate", "48000"]
+    #         sampling_rescale_factor = float(source_params["bit_rate"]) / 48000.0
+    #     ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "libopus", "-b:a", opus_bitrate_str]
+    #     ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
+    #     ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
 
-    else:
-        ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
-        ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
+    # else:
+    #     ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
+    #     ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
 
-    ffmpeg_cmd += ["-sample_fmt", target_sample_format, "-f", "ogg", str(tmp_file)]
+    # ffmpeg_cmd += ["-sample_fmt", target_sample_format, "-f", "ogg", str(tmp_file)]
 
-    # start encoding into temp file and wait until finished
-    subprocess.run(ffmpeg_cmd, check=True)
+    # # start encoding into temp file and wait until finished
+    # subprocess.run(ffmpeg_cmd, check=True)
 
-    return sampling_rescale_factor
+    # return sampling_rescale_factor
 
 def create_index(audio_file_blob_array: zarr.Array, zarr_original_audio_group: zarr.Group):
     """

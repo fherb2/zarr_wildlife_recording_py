@@ -5,127 +5,103 @@ import numpy as np
 import av # is PyAV
 import io
 from concurrent.futures import ThreadPoolExecutor
-
-
-
-class OggOpusIndexer:
-    """Indexer für Ogg-Container mit Opus-Codec"""
+      
+def build_ogg_opus_index(audio_blob_group: zarr.Group, audio_blob_array: zarr.Array):
+    """
+    Erstellt einen Index, der Sample-Positionen zu Ogg-Pages zuordnet
     
-    def __init__(self, zarr_path, audio_array_path):
-        """
-        Initialisiert den Indexer
-        
-        Args:
-            zarr_path: Pfad zum Zarr-Store
-            audio_array_path: Pfad zum Array innerhalb des Zarr-Stores, das die Audio-Bytes enthält
-        """
-        self.zarr_store = zarr.open(zarr_path, mode='r+')
-        self.audio_bytes = self.zarr_store[audio_array_path]
-        
-        # Hole Metadaten aus den Attributen
-        self.sample_rate = self.audio_bytes.attrs.get('sample_rate', 48000)  # Default: 48kHz für Opus
-        self.channels = self.audio_bytes.attrs.get('channels', 1)
-        
-    def build_index(self):
-        """
-        Erstellt einen Index, der Sample-Positionen zu Ogg-Pages zuordnet
-        
-        Returns:
-            Dictionary mit Indexdaten
-        """
-        audio_bytes = bytes(self.audio_bytes[()])
-        
-        # Ogg-Page-Header identifizieren ("OggS")
-        page_positions = []
-        pos = 0
-        
-        while pos < len(audio_bytes):
-            if audio_bytes[pos:pos+4] == b'OggS':
-                # Speichere Position und Parse Header
-                header_type = audio_bytes[pos+5]
-                granule_pos = int.from_bytes(audio_bytes[pos+6:pos+14], byteorder='little', signed=False)
-                
-                # Berechne Sampleposition basierend auf Granule Position
-                sample_pos = granule_pos
-                
-                # Anzahl der Segmente in dieser Page
-                num_segments = audio_bytes[pos+26]
-                
-                # Länge der Segmentgrößen-Tabelle
-                segment_table_length = num_segments
-                
-                # Berechne Gesamtlänge der Page
-                page_size = 27 + segment_table_length
-                for i in range(num_segments):
-                    page_size += audio_bytes[pos+27+i]
-                
-                page_positions.append({
-                    'byte_offset': pos,
-                    'page_size': page_size,
-                    'sample_pos': sample_pos,
-                    'granule_pos': granule_pos
-                })
-                
-                pos += page_size
-            else:
-                pos += 1
-        
-        # Erstelle Index-Array im Zarr-Store
-        index_array = np.array([(p['byte_offset'], p['page_size'], p['sample_pos']) 
-                               for p in page_positions], 
-                              dtype=[('byte_offset', np.int64), 
-                                     ('page_size', np.int32),
-                                     ('sample_pos', np.int64)])
-        
-        self.zarr_store.create_dataset('opus_index', data=index_array, 
-                                      chunks=(min(1000, len(page_positions)),))
-        
-        # Speichere zusätzliche Metadaten
-        self.zarr_store['opus_index'].attrs['sample_rate'] = self.sample_rate
-        self.zarr_store['opus_index'].attrs['channels'] = self.channels
-        
-        return index_array
+    Returns:
+        Dictionary mit Indexdaten
+    """
+
+    # Ogg-Page-Header identifizieren ("OggS")
+    page_positions = []
+    pos = 0
+    while pos < len(audio_blob_array.shape[0]):
+        if audio_blob_array[pos:pos+4] == b'OggS':
+            # Speichere Position und Parse Header
+        #    header_type = self.audio_blob_array[pos+5]
+            granule_pos = int.from_bytes(audio_blob_array[pos+6:pos+14], byteorder='little', signed=False)
+            
+            # Berechne Sampleposition basierend auf Granule Position
+            sample_pos = granule_pos
+            
+            # Anzahl der Segmente in dieser Page
+            num_segments = int(audio_blob_array[pos+26])
+            
+            # Länge der Segmentgrößen-Tabelle
+            segment_table_length = num_segments
+            
+            # Berechne Gesamtlänge der Page
+            page_size = 27 + segment_table_length
+            for i in range(num_segments):
+                page_size += int(audio_blob_array[pos+27+i])
+            
+            page_positions.append({
+                'byte_offset': pos,
+                'page_size': page_size,
+                'sample_pos': sample_pos,
+                'granule_pos': granule_pos
+            })
+            
+            pos += page_size
+        else:
+            pos += 1
     
-    def find_pages_for_samples(self, start_sample, end_sample):
-        """
-        Findet Ogg-Pages, die die angegebenen Samples enthalten
+    # Erstelle Index-Array
+    index_array = np.array([(p['byte_offset'], p['page_size'], p['sample_pos']) 
+                            for p in page_positions], 
+                            dtype=[('byte_offset', np.int64), 
+                                    ('page_size', np.int32),
+                                    ('sample_pos', np.int64)])
+    
+    index_array = audio_blob_group.create_array('index', shape=index_array.shape, dtype=index_array.dtype, 
+                        chunks=(min(int(1e6), len(page_positions)),))
+    index_array.append(index_array)
+    index_array.attrs["index_type"] = "ogg_opus_index"
         
-        Args:
-            start_sample: Erstes Sample, das dekodiert werden soll
-            end_sample: Letztes Sample, das dekodiert werden soll
-            
-        Returns:
-            Liste der Page-Indizes, die dekodiert werden müssen
-        """
-        index_array = self.zarr_store['opus_index']
+    return index_array
+    
+
+
+def find_pages_for_samples(self, index_array:zarr.Array, start_sample:int, end_sample:int):
+    """
+    Findet Ogg-Pages, die die angegebenen Samples enthalten
+    
+    Args:
+        start_sample: Erstes Sample, das dekodiert werden soll
+        end_sample: Letztes Sample, das dekodiert werden soll
         
-        # Binary Search für die erste Page, die start_sample enthält oder darüber liegt
-        sample_positions = index_array['sample_pos']
-        start_idx = np.searchsorted(sample_positions, start_sample, side='right') - 1
-        start_idx = max(0, start_idx)  # Sicherstellen, dass wir nicht unter 0 gehen
+    Returns:
+        Liste der Page-Indizes, die dekodiert werden müssen
+    """
+    
+    # Binary Search für die erste Page, die start_sample enthält oder darüber liegt
+    sample_positions = index_array['sample_pos'] Das ist noch Unsinn.
+    start_idx = np.searchsorted(sample_positions, start_sample, side='right') - 1
+    start_idx = max(0, start_idx)  # Sicherstellen, dass wir nicht unter 0 gehen
+    
+    # Finde alle Pages bis zur letzten benötigten
+    end_idx = np.searchsorted(sample_positions, end_sample, side='right')
+    
+    # Sichere Obergrenze
+    end_idx = min(end_idx, len(index_array) - 1)
+    
+    # Pages, die dekodiert werden müssen (inkl. Überlappung für korrekte Dekodierung)
+    required_pages = list(range(start_idx, end_idx + 1))
+    
+    # Für Opus: Wir brauchen möglicherweise eine vorherige Page für die korrekte Dekodierung
+    if start_idx > 0:
+        required_pages.insert(0, start_idx - 1)
         
-        # Finde alle Pages bis zur letzten benötigten
-        end_idx = np.searchsorted(sample_positions, end_sample, side='right')
-        
-        # Sichere Obergrenze
-        end_idx = min(end_idx, len(index_array) - 1)
-        
-        # Pages, die dekodiert werden müssen (inkl. Überlappung für korrekte Dekodierung)
-        required_pages = list(range(start_idx, end_idx + 1))
-        
-        # Für Opus: Wir brauchen möglicherweise eine vorherige Page für die korrekte Dekodierung
-        if start_idx > 0:
-            required_pages.insert(0, start_idx - 1)
-            
-        return required_pages
+    return required_pages
 
 
 
 # Beispiel zur Verwendung
-def create_opus_index(zarr_path, audio_array_path):
+def create_opus_index(zarr_audio_blob_grp, zarr_audio_blob_array):
     """Erstellt einen Index für eine Ogg-Opus-Datei in einem Zarr-Store"""
-    indexer = OggOpusIndexer(zarr_path, audio_array_path)
-    index = indexer.build_index()
+    index = build_ogg_opus_index(zarr_audio_blob_grp, zarr_audio_blob_array)
     print(f"Opus-Index erstellt mit {len(index)} Pages")
     return index
 
@@ -133,7 +109,7 @@ def create_opus_index(zarr_path, audio_array_path):
 # create_opus_index('mein_zarr_store.zarr', 'audio/opus_bytes')
 
 
-
+# NACHFOLGEND: Ebenfalls in einzelne Funktionen teilen, wenn für flac funktionstüchtig.
 
 
 class OggOpusDecoder:
