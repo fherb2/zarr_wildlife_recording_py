@@ -4,21 +4,10 @@ Dieses Skript führt grundlegende Tests ohne das unittest-Framework durch.
 """
 import pathlib
 import os
-import sys
 import shutil
 import numpy as np
 import zarr
 import datetime
-import tempfile
-from typing import List
-
-# Pfade für Tests
-TEST_RESULTS_DIR = pathlib.Path(__file__).parent.resolve() / "testresults"
-ZARR3_STORE_DIR = TEST_RESULTS_DIR / "zarr3-store"
-
-# Füge den Projektpfad zum sys.path hinzu, falls nötig
-# (Passe dies an deine Projektstruktur an)
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.resolve()))
 
 # Importierte Module
 from zarrwlr.aimport import (
@@ -28,16 +17,20 @@ from zarrwlr.aimport import (
 )
 from zarrwlr.config import Config
 
-def get_test_files() -> List[pathlib.Path]:
-    test_files = [
-                    "testdata/audiomoth_long_snippet.wav",
-                    "testdata/audiomoth_long_snippet_converted.opus",
-                    "testdata/audiomoth_long_snippet_converted.flac",
-                    "testdata/audiomoth_short_snippet.wav",
-                    "testdata/bird1_snippet.mp3",
-                    "testdata/camtrap_snippet.mov" # mp4 coded video with audio stream
-                ]
-    return [pathlib.Path(__file__).parent.resolve() / file for file in test_files]
+# ##########################################################
+#
+# Helpers
+# =======
+#
+# ##########################################################
+
+TEST_RESULTS_DIR = pathlib.Path(__file__).parent.resolve() / "testresults"
+ZARR3_STORE_DIR = TEST_RESULTS_DIR / "zarr3-store"
+
+def prepare_testresult_dir():
+    # remove content in result directory or create directory
+    os.system(f"rm -rf {str(TEST_RESULTS_DIR)}/*")
+    os.system(f"mkdir -p {str(TEST_RESULTS_DIR)}")
 
 def prepare_zarr_database() -> zarr.Group:
     # Verzeichnis erstellen, falls es nicht existiert
@@ -58,6 +51,24 @@ def prepare_zarr_database() -> zarr.Group:
     audio_import_grp.attrs["version"] = Config.original_audio_group_version
     
     return audio_import_grp
+
+def get_test_files() -> list[pathlib.Path]:
+    test_files = [
+                    "testdata/audiomoth_long_snippet.wav",
+                    "testdata/audiomoth_long_snippet_converted.opus",
+                    "testdata/audiomoth_long_snippet_converted.flac",
+                    "testdata/audiomoth_short_snippet.wav",
+                    "testdata/bird1_snippet.mp3",
+                    "testdata/camtrap_snippet.mov" # mp4 coded video with audio stream
+                ]
+    return [pathlib.Path(__file__).parent.resolve() / file for file in test_files]
+
+# ###########################################################
+#
+# Tests
+# =====
+#
+# ###########################################################
 
 def test_import_wav_to_flac():
     """Test: WAV-Datei zu FLAC konvertieren und in Zarr importieren"""
