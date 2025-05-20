@@ -1,8 +1,9 @@
+
+
 import numpy as np
 import subprocess
 import logging
 import pathlib
-from pathlib import Path
 import hashlib
 import json
 import datetime
@@ -10,11 +11,6 @@ import yaml
 import tempfile
 from mutagen import File as MutagenFile
 import zarr
-import struct
-import io
-import soundfile as sf
-from concurrent.futures import ThreadPoolExecutor
-import os
 
 # Import the functions from flacbyteblob and opusbyteblob
 from .flacbyteblob import (
@@ -31,6 +27,9 @@ from .utils import next_numeric_group_name, remove_zarr_group_recursive
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
+
+STD_TEMP_DIR = "/tmp"
+AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array"
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -49,18 +48,16 @@ def _check_ffmpeg_tools():
 # We do this check during import:
 _check_ffmpeg_tools()
 
-STD_TEMP_DIR = "/tmp"
-AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array"
 
-def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None = None):
+def create_original_audio_group(store_path: str|pathlib.Path, group_path:zarr.Group|None = None):
     """
     Erstellt eine neue Original-Audio-Gruppe im Zarr-Store oder prüft eine existierende.
     
     Args:
-        store_path: Pfad zum Zarr-Store
+        store_path: Pfad zum Zarr -Store
         group_path: Pfad zur Gruppe innerhalb des Stores (optional)
     """
-    store = zarr.DirectoryStore(store_path)
+    store = zarr.storage.LocalStore(store_path)
     root = zarr.open_group(store, mode='a')
 
     def initialize_group(grp:zarr.Group):
@@ -144,7 +141,7 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
     Raises:
         FileNotFoundError: Wenn die Datei nicht gefunden wird
     """
-    file_path = Path(file)
+    file_path = pathlib.Path(file)
 
     if not file_path.is_file():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -161,8 +158,9 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
         cmd = [
             "ffprobe",
             "-v", "error",
-            "-select_streams", "a",
-            "-show_entries", "format=format_name:stream=codec_name,sample_rate,sample_fmt,channels",
+            "-select_streams", "a",  # Wählt alle Audiostreams aus
+            "-show_entries", "format=format_name",  # Format-Information
+            "-show_entries", "stream=index,codec_name,sample_rate,sample_fmt,channels",  # Stream-Information mit index
             "-of", "json",
             str(file_path)
         ]
@@ -200,6 +198,85 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
         logger.error(f"Fehler beim Extrahieren der Audiodatei-Eigenschaften: {e}")
         # so reset to default
         base_features = AudioFileBaseFeatures()
+
+# verbesserte Version könnte so aussehen:
+# try:
+#     result = subprocess.run(cmd,
+#                             stdout=subprocess.PIPE,
+#                             stderr=subprocess.PIPE,
+#                             check=True,
+#                             text=True,
+#                             timeout=30)  # Timeout hinzufügen
+    
+#     metadata = json.loads(result.stdout)
+    
+#     # Format-Informationen
+#     base_features[base_features.CONTAINER_FORMAT] = metadata.get("format", {}).get("format_name", "unknown")
+    
+#     # Stream-Informationen
+#     streams = metadata.get("streams", [])
+#     base_features[base_features.NB_STREAMS] = len(streams)
+#     base_features[base_features.HAS_AUDIO_STREAM] = len(streams) > 0
+    
+#     # Sicheres Extrahieren von Stream-Eigenschaften
+#     codec_names = []
+#     sample_rates = []
+#     sample_formats_as_dtype = []
+#     sample_formats_is_planar = []
+#     channels_per_stream = []
+    
+#     for stream in streams:
+#         # Codec-Name
+#         codec_names.append(stream.get("codec_name", "unknown"))
+        
+#         # Sample Rate
+#         try:
+#             sample_rates.append(int(stream.get("sample_rate", 0)))
+#         except (ValueError, TypeError):
+#             sample_rates.append(0)
+        
+#         # Sample Format
+#         sample_fmt = stream.get("sample_fmt", "s16")
+#         try:
+#             sample_formats_as_dtype.append(AudioSampleFormatMap.get(sample_fmt, AudioSampleFormatMap["s16"]))
+#         except KeyError:
+#             sample_formats_as_dtype.append(AudioSampleFormatMap["s16"])  # Fallback
+        
+#         sample_formats_is_planar.append(sample_fmt.endswith("p"))
+        
+#         # Channels
+#         try:
+#             channels_per_stream.append(int(stream.get("channels", 0)))
+#         except (ValueError, TypeError):
+#             channels_per_stream.append(0)
+    
+#     # Einzigartige Werte speichern, falls gewünscht
+#     base_features[base_features.CODEC_PER_STREAM] = list(set(codec_names))
+#     base_features[base_features.SAMPLING_RATE_PER_STREAM] = list(set(sample_rates))
+#     base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = list(set(sample_formats_as_dtype))
+#     base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = list(set(sample_formats_is_planar))
+#     base_features[base_features.CHANNELS_PER_STREAM] = list(set(channels_per_stream))
+    
+#     # Optional: Stream-Zuordnung beibehalten
+#     base_features[base_features.STREAMS] = [{
+#         "index": stream.get("index"),
+#         "codec_name": stream.get("codec_name", "unknown"),
+#         "sample_rate": sample_rates[i],
+#         "sample_fmt": stream.get("sample_fmt", "s16"),
+#         "channels": channels_per_stream[i]
+#     } for i, stream in enumerate(streams)]
+    
+# except subprocess.TimeoutExpired:
+#     logger.error(f"Timeout beim Ausführen von ffprobe für {file_path}")
+#     # Fallback-Werte setzen
+    
+# except subprocess.SubprocessError as e:
+#     logger.error(f"Fehler beim Ausführen von ffprobe: {e}")
+#     # Fallback-Werte setzen
+    
+# except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+#     logger.error(f"Fehler beim Verarbeiten der ffprobe-Ausgabe: {e}")
+#     # Fallback-Werte setzen
 
     return base_features
 
@@ -243,8 +320,8 @@ class FileMeta:
         file: Pfad zur Audiodatei
         audio_only: Wenn True, werden nur Audio-Streams erfasst
     """
-    def __init__(self, file: str|Path, audio_only:bool=True):
-        file = Path(file)
+    def __init__(self, file: str|pathlib.Path, audio_only:bool=True):
+        file = pathlib.Path(file)
         # from ffprobe
         # ------------
         self.meta = {"ffprobe": self._ffprobe_info(file)}
@@ -253,7 +330,7 @@ class FileMeta:
         self.meta["mutagen"] = self._mutagen_info(file)
 
     @classmethod
-    def _ffprobe_info(cls, file: Path) -> dict:
+    def _ffprobe_info(cls, file: pathlib.Path) -> dict:
         cmd = [
             "ffprobe",
             "-v", "error",
@@ -278,7 +355,7 @@ class FileMeta:
         return info
 
     @staticmethod
-    def _mutagen_info(file: Path) -> dict:
+    def _mutagen_info(file: pathlib.Path) -> dict:
         audio = MutagenFile(file, easy=False)
         if not audio:
             raise ValueError(f"Unsupported or unreadable file for 'mutagen': {file}")
