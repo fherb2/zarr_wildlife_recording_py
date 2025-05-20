@@ -1,8 +1,8 @@
+
 import numpy as np
 import subprocess
 import logging
 import pathlib
-from pathlib import Path
 import hashlib
 import json
 import datetime
@@ -10,27 +10,20 @@ import yaml
 import tempfile
 from mutagen import File as MutagenFile
 import zarr
-import struct
-import io
-import soundfile as sf
-from concurrent.futures import ThreadPoolExecutor
-import os
-
-# Import the functions from flacbyteblob and opusbyteblob
-from .flacbyteblob import (
-    build_flac_index, 
-    extract_audio_segment_flac, 
-    parallel_extract_audio_segments_flac
-)
-from .opusbyteblob import (
-    build_opus_index, 
-    extract_audio_segment_opus, 
-    parallel_extract_audio_segments_opus
-)
 from .utils import next_numeric_group_name, remove_zarr_group_recursive
 from .config import Config
-from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError
+from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
+
+# ------ Das ist neuer Code, teils von Claude.ai:
+from .flacbyteblob import FLACIndexer
+from .opusbyteblob import OggOpusIndexer
+# --------------------------------------------
+
+# ----------- Das ist veralteter code
+from .oggfileblob import import_audio_to_blob as ogg_import_audio_to_blob
+from .oggfileblob import create_index as ogg_create_index
+# -----------------------------------
 
 # get the module logger   
 logger = logging.getLogger(__name__)
@@ -53,13 +46,7 @@ STD_TEMP_DIR = "/tmp"
 AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array"
 
 def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None = None):
-    """
-    Erstellt eine neue Original-Audio-Gruppe im Zarr-Store oder prüft eine existierende.
-    
-    Args:
-        store_path: Pfad zum Zarr-Store
-        group_path: Pfad zur Gruppe innerhalb des Stores (optional)
-    """
+
     store = zarr.DirectoryStore(store_path)
     root = zarr.open_group(store, mode='a')
 
@@ -89,16 +76,6 @@ def create_original_audio_group(store_path: str|Path, group_path:zarr.Group|None
         check_if_original_audio_group(group = root[group_path])
 
 def check_if_original_audio_group(group:zarr.Group):
-    """
-    Überprüft, ob eine Gruppe eine gültige Original-Audio-Gruppe ist.
-    
-    Args:
-        group: Zu prüfende Zarr-Gruppe
-        
-    Raises:
-        ZarrComponentVersionError: Wenn die Gruppenversion nicht mit der erwarteten Version übereinstimmt
-        ZarrGroupMismatch: Wenn die Gruppe keine Original-Audio-Gruppe ist
-    """
     grp_ok =     ("magic_id" in group.attrs) \
              and (group.attrs["magic_id"] == Config.original_audio_group_magic_id) \
              and ("version" in group.attrs)
@@ -109,15 +86,7 @@ def check_if_original_audio_group(group:zarr.Group):
     raise ZarrGroupMismatch(f"The group '{group}' is not an original audio group.")
 
 def audio_codec_compression(codec_name: str) -> AudioCompression:
-    """
-    Erkennt den Kompressionstyp anhand des Codec-Namens.
-    
-    Args:
-        codec_name: Name des Audio-Codecs
-        
-    Returns:
-        AudioCompression: Kompressionstyp (UNCOMPRESSED, LOSSLESS_COMPRESSED, LOSSY_COMPRESSED, UNKNOWN)
-    """
+    """Recognize principle AudioCompression from codec name."""
     if codec_name.startswith("pcm_"):
         return AudioCompression.UNCOMPRESSED
     
@@ -132,18 +101,8 @@ def audio_codec_compression(codec_name: str) -> AudioCompression:
     return AudioCompression.UNKNOWN
 
 def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatures:
-    """
-    Ermittelt grundlegende Informationen über eine Audiodatei.
-    
-    Args:
-        file: Pfad zur Audiodatei
-        
-    Returns:
-        AudioFileBaseFeatures: Objekt mit Basisinformationen über die Audiodatei
-        
-    Raises:
-        FileNotFoundError: Wenn die Datei nicht gefunden wird
-    """
+    """Get basic information about an audio file."""
+
     file_path = Path(file)
 
     if not file_path.is_file():
@@ -162,7 +121,7 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
             "ffprobe",
             "-v", "error",
             "-select_streams", "a",
-            "-show_entries", "format=format_name:stream=codec_name,sample_rate,sample_fmt,channels",
+            "-show_entries", "format=format_name:stream=codec_name",
             "-of", "json",
             str(file_path)
         ]
@@ -172,16 +131,19 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
                                 check=True,
                                 text=True)
         metadata = json.loads(result.stdout)
+        print(f"{metadata=}\n\n")
+
+
         base_features[base_features.CONTAINER_FORMAT] = \
                                         metadata.get("format", {}).get("format_name", "unknown")
         streams                                       = metadata.get("streams", [])
         base_features[base_features.NB_STREAMS]       = len(streams)
         base_features[base_features.HAS_AUDIO_STREAM] = len(streams) > 0
         base_features[base_features.CODEC_PER_STREAM] = list({stream.get("codec_name", "unknown") for stream in streams})
-        base_features[base_features.SAMPLING_RATE_PER_STREAM] = list({int(stream.get("sample_rate", 0)) for stream in streams})
+        base_features[base_features.SAMPLING_RATE_PER_STREAM] = list({int(stream.get("sample_rate", None)) for stream in streams})
         base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = list({AudioSampleFormatMap.get(stream.get("sample_fmt", "s16")) for stream in streams})
         base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = list({stream.get("sample_fmt", "s16").endswith("p") for stream in streams})
-        base_features[base_features.CHANNELS_PER_STREAM] = list({int(stream.get("channels", 0)) for stream in streams})
+        base_features[base_features.CHANNELS_PER_STREAM] = list({int(stream.get("channels", None)) for stream in streams})
 
         base_features[base_features.CODEC_COMPRESSION_KIND_PER_STREAM] = []
         for codec in base_features[base_features.CODEC_PER_STREAM]:
@@ -196,27 +158,16 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
                 hasher.update(chunk)
         base_features[base_features.SH256] = hasher.hexdigest()
 
-    except Exception as e:
-        logger.error(f"Fehler beim Extrahieren der Audiodatei-Eigenschaften: {e}")
+    except Exception:
         # so reset to default
         base_features = AudioFileBaseFeatures()
 
     return base_features
 
-def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
-                                     base_features: AudioFileBaseFeatures,
-                                     sh246_check_only: bool = False) -> bool:
-    """
-    Überprüft, ob eine Audiodatei mit den angegebenen Eigenschaften bereits in der Gruppe vorhanden ist.
-    
-    Args:
-        zarr_original_audio_group: Zarr-Gruppe mit Original-Audiodateien
-        base_features: Eigenschaften der zu prüfenden Audiodatei
-        sh246_check_only: Wenn True, wird nur der SHA256-Hash verglichen
-        
-    Returns:
-        bool: True, wenn die Audiodatei bereits in der Gruppe existiert
-    """
+def is_audio_in_original_audio_group( zarr_original_audio_group: zarr.Group,
+                                      base_features: AudioFileBaseFeatures,
+                                      sh246_check_only: bool = False
+                                    ) -> bool:
     for group_name in zarr_original_audio_group:
         # we need check this group only the name is only a number
         if group_name.isdigit():
@@ -236,13 +187,8 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
     return False
 
 class FileMeta:
-    """
-    Vollständige audiorelevante Metainformationen einer Datei über ffprobe und mutagen.
-    
-    Args:
-        file: Pfad zur Audiodatei
-        audio_only: Wenn True, werden nur Audio-Streams erfasst
-    """
+    """Full audio relevant meta information of a file by ffprobe and mutagen."""
+
     def __init__(self, file: str|Path, audio_only:bool=True):
         file = Path(file)
         # from ffprobe
@@ -328,109 +274,59 @@ class FileMeta:
         else:
             return obj
 
-
-
-def _get_source_params(input_file: pathlib.Path) -> dict:
-    """
-    Ermittelt grundlegende Parameter einer Audiodatei mit ffprobe.
-    
-    Args:
-        input_file: Pfad zur Audiodatei
-        
-    Returns:
-        dict: Dictionary mit den grundlegenden Eigenschaften der Audiodatei
-    """
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "a:0",
-        "-show_entries", "stream=sample_rate:stream=codec_name:stream=sample_fmt:stream=bit_rate:stream=channels",
-        "-of", "json", str(input_file)
-    ]
-    out = subprocess.check_output(args=cmd)
-    info = json.loads(out)
-    source_params = {
-                "sampling_rate": int(info['streams'][0]['sample_rate']) if 'sample_rate' in info['streams'][0] else None,
-                "is_opus": info['streams'][0]['codec_name'] == "opus",
-                "sample_format": info['streams'][0]['sample_fmt'] if 'sample_fmt' in info['streams'][0] else "s16",
-                "bit_rate": int(info['streams'][0]['bit_rate']) if 'bit_rate' in info['streams'][0] else None,
-                "nb_channels": int(info['streams'][0]['channels']) if 'channels' in info['streams'][0] else 1
-            }
-    return source_params
-
-
-def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
-    """
-    Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
-    
-    Args:
-        source_sample_fmt: Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
-        target_codec: "flac" oder "opus"
-    
-    Returns:
-        str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
-    """
-    # Mappings nach Fähigkeiten der Codecs
-    flac_supported = ["s8", "s12", "s16", "s24", "s32"]
-    opus_supported = ["s16", "s24", "flt"]
-
-    # Auflösen von planar zu packed
-    normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
-
-    if target_codec == "flac":
-        if normalized_fmt in flac_supported:
-            return normalized_fmt
-        # fallback
-        return "s32"
-
-    elif target_codec == "opus":
-        # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
-        if normalized_fmt in opus_supported:
-            return normalized_fmt
-        # fallback auf float oder s16
-        return "flt" if normalized_fmt.startswith("f") else "s16"
-
-    else:
-        raise NotImplementedError(f"Unsupported codec: {target_codec}")
-
-
 def import_original_audio_file(
                     audio_file: str|pathlib.Path, 
                     zarr_original_audio_group: zarr.Group,
                     first_sample_time_stamp: datetime.datetime|None,
                     last_sample_time_stamp: datetime.datetime|None = None,
                     target_codec:str = 'flac', # 'flac' or 'opus'
-                    flac_compression_level: int = 4, # 0...12; 4 ist ein guter Kompromiss
+                    flac_compression_level: int = 4, # 0...12; 4 is a really good value: fast and low
+                                                        # data; higher values does not really reduce 
+                                                        # data size but need more time and energy. 
+                                                        # Note:
+                                                        # The highest values can produce more data
+                                                        # than lower values. '12' as maximum must not
+                                                        # be the best compression. Check it: More than
+                                                        # 4 is not really less memory consumption but
+                                                        # wasted time and energy.
                     opus_bitrate:int = 160_000, # bit per second
                     temp_dir="/tmp",
                     chunk_size:int = Config.original_audio_chunk_size
                     ):
-    """
-    Importiert eine Audiodatei in die Original-Audio-Gruppe und erstellt Index.
-    
-    Arbeitsablauf:
-    1. Analysiere Datei-/Audio-/Codec-Typ
-    2. Überprüfe, ob die Datei bereits in der Datenbank vorhanden ist
-    3. Erfasse alle Metadaten der Datei
-    4. Berechne die nächste freie Gruppen-Nummer
-    5. Erstelle die Gruppe, dekodiere die Datei und importiere sie je nach Quell- und Zielcodec
-    6. Erstelle den Index und füge ihn als Array hinzu
-    7. Füge alle Metadaten als Attribute hinzu
-    
-    Args:
-        audio_file: Pfad zur Audiodatei
-        zarr_original_audio_group: Zarr-Gruppe für Original-Audiodateien
-        first_sample_time_stamp: Zeitstempel des ersten Samples
-        last_sample_time_stamp: Zeitstempel des letzten Samples (optional)
-        target_codec: Zielcodec ('flac' oder 'opus')
-        flac_compression_level: Kompressionsgrad für FLAC (0-12)
-        opus_bitrate: Bitrate für Opus (bit/s)
-        temp_dir: Verzeichnis für temporäre Dateien
-        chunk_size: Chunk-Größe für das Zarr-Array
-    
-    Raises:
-        Doublet: Wenn die Datei bereits in der Datenbank vorhanden ist
-        ValueError: Wenn die Datei keinen Audio-Stream enthält
-        NotImplementedError: Wenn die Datei mehr als einen Audio-Stream enthält
-    """
+
+    # Analyze File-/Audio-/Codec-Type: we need 
+    #   original file name
+    #   original file size
+    #   original file type
+    #   original codec name
+    #   original file byte-Hash
+    # Is 'original file name' and 'original size' known in database?
+    #   If yes: Is 'original hash' the same as in database?
+    #               If yes: get warning and raise Exception
+    #               If no: get warning only and continue
+    # Look for all other meta data inside the file.
+    # Calculate the next free 'array-number'.
+    # Create array, decode file and import depending on source and target codec
+    # Create Index and put it into array
+    # Put all meta data as attributes.
+    # Set attribute 'import_finalized' with true. Thats the marker for a completed import. 
+    #
+    # In case, the target codec is 'opus', a lossy compress format:
+    # 
+    #   In contrast to 'flac', 'opus' codec can only use sampling frequencies of 48kS/s (or lower)! 
+    #   If the source has a higher sampling frequency, we would loose information. This is important
+    #   insofar as the source could be specialized for ultrasonic frequencies! In order to can compress
+    #   such high frequencies, we use a trick: For the compressing algorithm, we say 'source is 48kS/s'.
+    #   but we remember the factor of the real sampling frequency to this 48kS/s. If we uncompress
+    #   the data later for processing or export, we reinterprete the sampling fequency to the original 
+    #   value.
+    #   There's only one drawback: If these audio has also very deep frequencies, so the opus comprression
+    #   algorithm can interprete these as inaudible and remove all of them. To avoid this, use 'flac'
+    #   or downsample the audio source to 48kS/s before.
+    #   
+
+
+
     assert target_codec in ('flac', 'opus') 
     assert (flac_compression_level >= 0) and (flac_compression_level <= 12)
 
@@ -442,11 +338,16 @@ def import_original_audio_file(
     # 1) Analyze File-/Audio-/Codec-Type
     base_features = base_features_from_audio_file(audio_file)
     source_params = _get_source_params(audio_file)
+    # target_sample_format = _get_ffmpeg_sample_fmt(source_params["sample_format"], 
+    #                                               target_codec)
 
     if not base_features[base_features.HAS_AUDIO_STREAM]:
         raise ValueError(f"File '{audio_file}' has no audio stream")
-    if base_features[base_features.NB_STREAMS] > 1:
+    if base_features.NB_STREAMS > 1:
         raise NotImplementedError("Audio file has more than one audio stream. Import of more than one audio streams (with any number of audio channels) is not yet supported.")
+
+
+
 
     # 2) Is file yet present in database?
     if is_audio_in_original_audio_group(zarr_original_audio_group, base_features):
@@ -491,7 +392,7 @@ def import_original_audio_file(
 
         opus_bitrate_str = str(int(opus_bitrate/1000))+'k'
         sampling_rescale_factor = 1.0
-        target_sample_rate = source_params["sampling_rate"]
+        target_sample_rate = base_features[base_features.SAMPLING_RATE_PER_STREAM[0]]
         is_ultrasonic = (target_codec == "opus") and (source_params["sampling_rate"] > 48000)
 
         if target_codec == 'opus' and source_params["is_opus"] and not is_ultrasonic:
@@ -507,7 +408,7 @@ def import_original_audio_file(
                 # we interprete sampling rate as "48000" to can use opus for ultrasonic
                 ffmpeg_cmd += ["-sample_rate", "48000"]
                 target_sample_rate = 48000
-                sampling_rescale_factor = float(source_params["sampling_rate"]) / 48000.0
+                sampling_rescale_factor = float(source_params["bit_rate"]) / 48000.0
             ffmpeg_cmd += ["-i", str(audio_file)]
             ffmpeg_cmd += ["-c:a", "libopus", "-b:a", opus_bitrate_str]
             ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VRB=On
@@ -540,76 +441,78 @@ def import_original_audio_file(
                 }
         if target_codec == "opus":
             attrs["container_type"] = "ogg"
-            attrs["opus_bitrate"] = opus_bitrate
+            attrs["opus_bitrate"] = opus_bitrate,
         else: # target_codec == "flac"
             attrs["compression_level"] = flac_compression_level
         audio_blob_array.attrs.update(attrs)
         
         # 7) Create and save index inside the group (as array, not attribute since the size of structured data)
-        # Build index for the appropriate codec - this is the key change from the original code
         if target_codec == 'opus':
-            # Using imported build_opus_index function instead of OggOpusIndexer
-            build_opus_index(new_original_audio_grp, audio_blob_array)
-        else:  # target_codec == 'flac'
-            # Using imported build_flac_index function instead of FLACIndexer
-            build_flac_index(new_original_audio_grp, audio_blob_array)
+            indexer = OggOpusIndexer(new_original_audio_grp, audio_blob_array)
+        else:
+            indexer = FLACIndexer(new_original_audio_grp, audio_blob_array)
+        # build index    
+        indexer.build_index()
 
-    except Exception as e:
+    except Exception:
         # Full-Rollback: In case of any exception: we remove the group with all content.
         if created:
             remove_zarr_group_recursive(zarr_original_audio_group.store, new_original_audio_grp.path)
-        logger.error(f"Error during audio import: {e}")
         raise  # raise original exception
 
 
-def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
-    """
-    Extrahiert ein Audiosegment aus einer Zarr-Gruppe, unabhängig vom verwendeten Codec.
-    
-    Args:
-        zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
-        start_sample: Erstes Sample, das extrahiert werden soll
-        end_sample: Letztes Sample, das extrahiert werden soll
-        dtype: Datentyp der Ausgabe (np.int16 oder np.float32)
-        
-    Returns:
-        np.ndarray: Extrahiertes Audiosegment
-        
-    Raises:
-        ValueError: Wenn der Codec nicht unterstützt wird
-    """
-    # Codec aus den Attributen holen
-    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-    codec = audio_blob_array.attrs.get('codec', 'unknown')
-    
-    if codec == 'flac':
-        return extract_audio_segment_flac(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
-    elif codec == 'opus':
-        return extract_audio_segment_opus(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
-    else:
-        raise ValueError(f"Nicht unterstützter Codec: {codec}")
 
 
-def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_workers=4):
+def _get_source_params(input_file: pathlib.Path) -> dict:
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=sample_rate:stream=codec_name:stream=sample_fmt:stream=bit_rate:stream=channels",
+        "-of", "json", str(input_file)
+    ]
+    out = subprocess.check_output(args=cmd)
+    info = json.loads(out)
+    source_params = {
+                "sampling_rate": int(info['streams'][0]['sample_rate']) if 'sample_rate' in info['streams'][0] else None,
+                "is_opus": info['streams'][0]['codec_name'] == "opus",
+                "sample_format": info['streams'][0]['sample_fmt'],
+                "bit_rate": int(info['streams'][0]['bit_rate']) if 'bit_rate' in info['streams'][0] else None,
+                "nb_channels": int(info['streams'][0]['channels'])
+            }
+    return source_params
+
+
+
+def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
     """
-    Extrahiert mehrere Audiosegmente parallel aus einer Zarr-Gruppe.
+    Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
     
     Args:
-        zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
-        segments: Liste von (start_sample, end_sample)-Tupeln
-        dtype: Datentyp der Ausgabe (np.int16 oder np.float32)
-        max_workers: Maximale Anzahl paralleler Worker
-        
-    Returns:
-        Liste von np.ndarray: Extrahierte Audiosegmente
-    """
-    # Codec aus den Attributen holen
-    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-    codec = audio_blob_array.attrs.get('codec', 'unknown')
+        source_sample_fmt (str): Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
+        target_codec (str): "flac" oder "opus"
     
-    if codec == 'flac':
-        return parallel_extract_audio_segments_flac(zarr_group, audio_blob_array, segments, dtype, max_workers)
-    elif codec == 'opus':
-        return parallel_extract_audio_segments_opus(zarr_group, audio_blob_array, segments, dtype, max_workers)
+    Returns:
+        str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
+    """
+
+    # Mappings nach Fähigkeiten der Codecs
+    flac_supported = ["s8", "s12", "s16", "s24", "s32"]
+    opus_supported = ["s16", "s24", "flt"]
+
+    # Auflösen von planar zu packed
+    normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
+
+    if target_codec == "flac":
+        if normalized_fmt in flac_supported:
+            return normalized_fmt
+        # fallback
+        return "s32"
+
+    elif target_codec == "opus":
+        # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
+        if normalized_fmt in opus_supported:
+            return normalized_fmt
+        # fallback auf float oder s16
+        return "flt" if normalized_fmt.startswith("f") else "s16"
+
     else:
-        raise ValueError(f"Nicht unterstützter Codec: {codec}")
+        raise NotImplementedError(f"Unsupported codec: {target_codec}")

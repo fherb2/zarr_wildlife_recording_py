@@ -16,17 +16,6 @@ import soundfile as sf
 from concurrent.futures import ThreadPoolExecutor
 import os
 
-# Import the functions from flacbyteblob and opusbyteblob
-from .flacbyteblob import (
-    build_flac_index, 
-    extract_audio_segment_flac, 
-    parallel_extract_audio_segments_flac
-)
-from .opusbyteblob import (
-    build_opus_index, 
-    extract_audio_segment_opus, 
-    parallel_extract_audio_segments_opus
-)
 from .utils import next_numeric_group_name, remove_zarr_group_recursive
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError
@@ -546,20 +535,20 @@ def import_original_audio_file(
         audio_blob_array.attrs.update(attrs)
         
         # 7) Create and save index inside the group (as array, not attribute since the size of structured data)
-        # Build index for the appropriate codec - this is the key change from the original code
         if target_codec == 'opus':
-            # Using imported build_opus_index function instead of OggOpusIndexer
-            build_opus_index(new_original_audio_grp, audio_blob_array)
-        else:  # target_codec == 'flac'
-            # Using imported build_flac_index function instead of FLACIndexer
-            build_flac_index(new_original_audio_grp, audio_blob_array)
-
+            indexer = OggOpusIndexer(new_original_audio_grp, audio_blob_array)
+        else:
+            indexer = FLACIndexer(new_original_audio_grp, audio_blob_array)
+        # build index    
+        indexer.build_index()
     except Exception as e:
         # Full-Rollback: In case of any exception: we remove the group with all content.
         if created:
             remove_zarr_group_recursive(zarr_original_audio_group.store, new_original_audio_grp.path)
         logger.error(f"Error during audio import: {e}")
         raise  # raise original exception
+
+
 
 
 def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
@@ -583,9 +572,9 @@ def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
     codec = audio_blob_array.attrs.get('codec', 'unknown')
     
     if codec == 'flac':
-        return extract_audio_segment_flac(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
+        return extract_audio_segment_flac(zarr_group, start_sample, end_sample, dtype)
     elif codec == 'opus':
-        return extract_audio_segment_opus(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
+        return extract_audio_segment_opus(zarr_group, start_sample, end_sample, dtype)
     else:
         raise ValueError(f"Nicht unterstützter Codec: {codec}")
 
@@ -603,13 +592,20 @@ def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_wo
     Returns:
         Liste von np.ndarray: Extrahierte Audiosegmente
     """
-    # Codec aus den Attributen holen
-    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-    codec = audio_blob_array.attrs.get('codec', 'unknown')
-    
-    if codec == 'flac':
-        return parallel_extract_audio_segments_flac(zarr_group, audio_blob_array, segments, dtype, max_workers)
-    elif codec == 'opus':
-        return parallel_extract_audio_segments_opus(zarr_group, audio_blob_array, segments, dtype, max_workers)
-    else:
-        raise ValueError(f"Nicht unterstützter Codec: {codec}")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_segment = {
+            executor.submit(extract_audio_segment, zarr_group, start, end, dtype): (start, end) 
+            for start, end in segments
+        }
+        
+        results = {}
+        for future in future_to_segment:
+            segment = future_to_segment[future]
+            try:
+                results[segment] = future.result()
+            except Exception as e:
+                logger.error(f"Fehler beim Extrahieren des Segments {segment}: {e}")
+                results[segment] = np.array([])
+                
+        # Sortiere nach der ursprünglichen Segment-Reihenfolge
+        return [results[segment] for segment in segments]

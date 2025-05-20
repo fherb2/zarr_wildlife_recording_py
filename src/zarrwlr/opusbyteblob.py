@@ -1,282 +1,233 @@
-
-
-import zarr
 import numpy as np
-import av # is PyAV
-import io
-from concurrent.futures import ThreadPoolExecutor
-      
-def build_ogg_opus_index(audio_blob_group: zarr.Group, audio_blob_array: zarr.Array):
-    """
-    Erstellt einen Index, der Sample-Positionen zu Ogg-Pages zuordnet
-    
-    Returns:
-        Dictionary mit Indexdaten
-    """
+import struct
+import zarr
+import logging
+import subprocess
+import tempfile
+from .exceptions import OggImportError
 
-    # Ogg-Page-Header identifizieren ("OggS")
-    page_positions = []
-    pos = 0
-    while pos < len(audio_blob_array.shape[0]):
-        if audio_blob_array[pos:pos+4] == b'OggS':
-            # Speichere Position und Parse Header
-        #    header_type = self.audio_blob_array[pos+5]
-            granule_pos = int.from_bytes(audio_blob_array[pos+6:pos+14], byteorder='little', signed=False)
-            
-            # Berechne Sampleposition basierend auf Granule Position
-            sample_pos = granule_pos
-            
-            # Anzahl der Segmente in dieser Page
-            num_segments = int(audio_blob_array[pos+26])
-            
-            # Länge der Segmentgrößen-Tabelle
-            segment_table_length = num_segments
-            
-            # Berechne Gesamtlänge der Page
-            page_size = 27 + segment_table_length
-            for i in range(num_segments):
-                page_size += int(audio_blob_array[pos+27+i])
-            
-            page_positions.append({
-                'byte_offset': pos,
-                'page_size': page_size,
-                'sample_pos': sample_pos,
-                'granule_pos': granule_pos
-            })
-            
-            pos += page_size
-        else:
-            pos += 1
-    
-    # Erstelle Index-Array
-    index_array = np.array([(p['byte_offset'], p['page_size'], p['sample_pos']) 
-                            for p in page_positions], 
-                            dtype=[('byte_offset', np.int64), 
-                                    ('page_size', np.int32),
-                                    ('sample_pos', np.int64)])
-    
-    index_array = audio_blob_group.create_array('index', shape=index_array.shape, dtype=index_array.dtype, 
-                        chunks=(min(int(1e6), len(page_positions)),))
-    index_array.append(index_array)
-    index_array.attrs["index_type"] = "ogg_opus_index"
-        
-    return index_array
-    
+# get the module logger
+logger = logging.getLogger(__name__)
 
+# Konstanten für Ogg-Container
+OGG_PAGE_HEADER_SIZE = 27
+OGG_MAX_PAGE_SIZE = 65536
 
-def find_pages_for_samples(self, index_array:zarr.Array, start_sample:int, end_sample:int):
+def build_opus_index(zarr_group, audio_blob_array):
     """
-    Findet Ogg-Pages, die die angegebenen Samples enthalten
+    Erstellt einen Index für Ogg-Pages, der die Byte-Positionen und Granule-Positionen 
+    (Sample-Positionen) enthält
     
     Args:
-        start_sample: Erstes Sample, das dekodiert werden soll
-        end_sample: Letztes Sample, das dekodiert werden soll
+        zarr_group: Zarr-Gruppe, in der der Index gespeichert werden soll
+        audio_blob_array: Array mit den binären Ogg-Opus-Audiodaten
         
     Returns:
-        Liste der Page-Indizes, die dekodiert werden müssen
+        Das erstellte Index-Array
+        
+    Raises:
+        OggImportError: Wenn die Daten nicht vollständig oder ungültig sind
     """
-    
-    # Binary Search für die erste Page, die start_sample enthält oder darüber liegt
-    sample_positions = index_array['sample_pos'] Das ist noch Unsinn.
-    start_idx = np.searchsorted(sample_positions, start_sample, side='right') - 1
-    start_idx = max(0, start_idx)  # Sicherstellen, dass wir nicht unter 0 gehen
-    
-    # Finde alle Pages bis zur letzten benötigten
-    end_idx = np.searchsorted(sample_positions, end_sample, side='right')
-    
-    # Sichere Obergrenze
-    end_idx = min(end_idx, len(index_array) - 1)
-    
-    # Pages, die dekodiert werden müssen (inkl. Überlappung für korrekte Dekodierung)
-    required_pages = list(range(start_idx, end_idx + 1))
-    
-    # Für Opus: Wir brauchen möglicherweise eine vorherige Page für die korrekte Dekodierung
-    if start_idx > 0:
-        required_pages.insert(0, start_idx - 1)
+    data = audio_blob_array
+    data_len = data.shape[0]
+
+    chunk_entries = []
+    max_entries_per_chunk = 65536  # entspricht ~1MB RAM bei typ int64
+
+    # Vorab leeres Zarr-Array mit großzügiger Maxshape
+    index_zarr = zarr_group.create_array(
+        name="ogg_page_index",
+        shape=(0, 2),
+        chunks=(max_entries_per_chunk, 2),
+        dtype=np.uint64,
+        maxshape=(None, 2),
+        overwrite=True
+    )
+
+    total_entries = 0
+    offset = 0
+    invalid_header_count = 0
+    while offset + OGG_PAGE_HEADER_SIZE < data_len:
+        # Überprüfen, ob wir einen Ogg-Page-Header finden
+        if not np.array_equal(data[offset:offset+4], np.frombuffer(b'OggS', dtype=np.uint8)):
+            offset += 1
+            # Robustheit bei fehlerhaften Daten verbessern
+            invalid_header_count += 1
+            if invalid_header_count > 1024:
+                raise OggImportError("Zu viele ungültige Ogg-Header. Import wird abgebrochen.")
+            continue
+
+        # Ogg-Page-Header extrahieren
+        header = data[offset : offset + OGG_PAGE_HEADER_SIZE]
+        # Granule-Position extrahieren (64-bit, little-endian)
+        granule_pos = struct.unpack_from('<Q', header.tobytes(), 6)[0]
+        # Segment-Anzahl aus dem Header lesen
+        segment_count = header[26]
+
+        # Segment-Tabelle lesen
+        seg_table_start = offset + OGG_PAGE_HEADER_SIZE
+        seg_table_end = seg_table_start + segment_count
+        if seg_table_end > data_len:
+            raise OggImportError("Daten nicht vollständig beim Indexieren.")
         
-    return required_pages
+        segment_table = data[seg_table_start:seg_table_end]
+        # Größe des Page-Body berechnen (Summe aller Segment-Größen)
+        page_body_size = int(np.sum(segment_table))
 
+        # Gesamtgröße der Page berechnen
+        page_size = OGG_PAGE_HEADER_SIZE + segment_count + page_body_size
+        if offset + page_size > data_len:
+            raise OggImportError("Daten nicht vollständig beim Indexieren.")
 
+        # Byte-Offset und Granule-Position in Einträge aufnehmen
+        chunk_entries.append((offset, granule_pos))
+        offset += page_size
 
-# Beispiel zur Verwendung
-def create_opus_index(zarr_audio_blob_grp, zarr_audio_blob_array):
-    """Erstellt einen Index für eine Ogg-Opus-Datei in einem Zarr-Store"""
-    index = build_ogg_opus_index(zarr_audio_blob_grp, zarr_audio_blob_array)
-    print(f"Opus-Index erstellt mit {len(index)} Pages")
-    return index
+        # Wenn genug Einträge gesammelt wurden, zum Zarr-Array hinzufügen
+        if len(chunk_entries) >= max_entries_per_chunk:
+            chunk_np = np.array(chunk_entries, dtype=np.uint64)
+            index_zarr.resize(total_entries + chunk_np.shape[0], axis=0)
+            index_zarr[total_entries : total_entries + chunk_np.shape[0], :] = chunk_np
+            total_entries += chunk_np.shape[0]
+            chunk_entries = []
 
-# Beispielaufruf:
-# create_opus_index('mein_zarr_store.zarr', 'audio/opus_bytes')
+    # Verbleibende Einträge hinzufügen
+    if chunk_entries:
+        chunk_np = np.array(chunk_entries, dtype=np.uint64)
+        index_zarr.resize(total_entries + chunk_np.shape[0], axis=0)
+        index_zarr[total_entries : total_entries + chunk_np.shape[0], :] = chunk_np
+        total_entries += chunk_np.shape[0]
 
-
-# NACHFOLGEND: Ebenfalls in einzelne Funktionen teilen, wenn für flac funktionstüchtig.
-
-
-class OggOpusDecoder:
-    """Decoder für Ogg-Container mit Opus-Codec"""
+    # Metadaten zum Index-Array hinzufügen
+    sample_rate = audio_blob_array.attrs.get('sample_rate', 48000)
+    channels = audio_blob_array.attrs.get('nb_channels', 1)
+    sampling_rescale_factor = audio_blob_array.attrs.get('sampling_rescale_factor', 1.0)
     
-    def __init__(self, zarr_path, audio_array_path='audio/opus_bytes', index_path='opus_index'):
-        """
-        Initialisiert den Decoder
-        
-        Args:
-            zarr_path: Pfad zum Zarr-Store
-            audio_array_path: Pfad zum Array innerhalb des Zarr-Stores, das die Audio-Bytes enthält
-            index_path: Pfad zum Index-Array innerhalb des Zarr-Stores
-        """
-        self.zarr_store = zarr.open(zarr_path, mode='r')
-        self.audio_bytes = self.zarr_store[audio_array_path]
-        self.index = self.zarr_store[index_path]
-        
-        # Metadaten aus dem Index holen
-        self.sample_rate = self.index.attrs.get('sample_rate', 48000)
-        self.channels = self.index.attrs.get('channels', 1)
+    index_zarr.attrs['sample_rate'] = sample_rate
+    index_zarr.attrs['channels'] = channels
+    index_zarr.attrs['sampling_rescale_factor'] = sampling_rescale_factor
     
-    def decode_pages(self, page_indices):
-        """
-        Dekodiert Ogg-Pages basierend auf den bereitgestellten Indizes
+    logger.info(f"Ogg-Opus-Index erstellt mit {total_entries} Seiten")
+    return index_zarr
+
+
+def extract_audio_segment_opus(zarr_group, audio_blob_array, start_sample, end_sample, dtype=np.int16):
+    """
+    Extrahiert ein Audiosegment aus einer Opus-Datei in einer Zarr-Gruppe
+    
+    Args:
+        zarr_group: Zarr-Gruppe, die den Index enthält
+        audio_blob_array: Array mit den Opus-Audiodaten
+        start_sample: Erstes Sample, das extrahiert werden soll (inklusive)
+        end_sample: Letztes Sample, das extrahiert werden soll (inklusive)
+        dtype: Datentyp der Ausgabe (np.int16 oder np.float32)
         
-        Args:
-            page_indices: Liste der Page-Indizes, die dekodiert werden sollen
-            
-        Returns:
-            Numpy-Array mit dekodierten Audiodaten
-        """
-        if not page_indices:
-            return np.array([])
-            
-        # Sammle alle benötigten Pages
-        audio_data = bytes(self.audio_bytes[()])
-        pages_data = bytearray()
+    Returns:
+        np.ndarray: Extrahiertes Audiosegment mit Shape (Samples, Channels)
         
-        for idx in page_indices:
-            byte_offset = self.index[idx]['byte_offset']
-            page_size = self.index[idx]['page_size']
-            pages_data.extend(audio_data[byte_offset:byte_offset+page_size])
+    Raises:
+        ValueError: Bei ungültigen Parametern oder Problemen mit dem Index
+        RuntimeError: Bei Fehlern in der Dekodierung
+    """
+    ogg_index = zarr_group['ogg_page_index']
+    
+    if start_sample > end_sample:
+        raise ValueError(f"Ungültiger Bereich: start_sample={start_sample}, end_sample={end_sample}")
+
+    # Suche Start- und Endposition im Index (sample-basiert via granule_position)
+    granules = ogg_index[:, 1]
+    start_idx = np.searchsorted(granules, start_sample, side="left")
+
+    if start_idx >= len(granules):
+        raise ValueError("Startposition liegt hinter letzter Index-Granule.")
+
+    end_idx = np.searchsorted(granules, end_sample, side="right") - 1
+    if end_idx < start_idx:
+        raise ValueError("Ungültiger Bereich im Index.")
+
+    # Bestimme Byte-Offsets im Ogg-Blob
+    start_byte = int(ogg_index[start_idx, 0])
+    end_byte = (
+        int(ogg_index[end_idx + 1, 0]) if end_idx + 1 < len(ogg_index) else audio_blob_array.shape[0]
+    )
+    actual_start_sample = int(ogg_index[start_idx, 1])
+
+    # Lade nur den betroffenen Ausschnitt aus dem Blob
+    ogg_slice = audio_blob_array[start_byte:end_byte].tobytes()
+
+    # Parameter aus Array-Attributen laden
+    sample_rate = audio_blob_array.attrs.get('sample_rate', 48000)
+    channels = audio_blob_array.attrs.get('nb_channels', 1)
+    
+    # FFMPEG aufrufen, um OGG-Daten zu dekodieren
+    cmd = [
+        "ffmpeg",
+        "-hide_banner", "-loglevel", "error",
+        "-f", "ogg",
+        "-i", "pipe:0",
+        "-ac", str(channels),
+        "-ar", str(sample_rate),
+        "-f", "s16le" if dtype == np.int16 else "f32le",
+        "pipe:1"
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    pcm_bytes, _ = proc.communicate(input=ogg_slice)
+    
+    if proc.returncode != 0 or not pcm_bytes:
+        raise RuntimeError("FFmpeg konnte das Audiosegment nicht dekodieren.")
+
+    # PCM-Daten als NumPy-Array interpretieren
+    samples = np.frombuffer(pcm_bytes, dtype=dtype)
+    if samples.size % channels != 0:
+        raise ValueError("Fehlerhafte Kanalanzahl im dekodierten PCM-Strom.")
+    samples = samples.reshape(-1, channels)
+
+    # Zielbereich (Samples) aus Gesamtergebnis extrahieren
+    rel_start = start_sample - actual_start_sample
+    rel_end = rel_start + (end_sample - start_sample + 1)  # inklusiv
+
+    if rel_start < 0 or rel_end > samples.shape[0]:
+        # Logger-Warnung, falls der Bereich nicht exakt passt
+        logger.warning(
+            f"Angeforderte Samples nicht exakt im dekodierten Bereich: {rel_start=}, {rel_end=}, shape={samples.shape}"
+        )
+        # Sichere Indizierung
+        rel_start = max(0, rel_start)
+        rel_end = min(rel_end, samples.shape[0])
+
+    return samples[rel_start:rel_end]
+
+
+def parallel_extract_audio_segments_opus(zarr_group, audio_blob_array, segments, dtype=np.int16, max_workers=4):
+    """
+    Extrahiert mehrere Audiosegmente parallel aus einer Opus-Datei
+    
+    Args:
+        zarr_group: Zarr-Gruppe, die den Index enthält
+        audio_blob_array: Array mit den Opus-Audiodaten
+        segments: Liste von (start_sample, end_sample)-Tupeln
+        dtype: Datentyp der Ausgabe (np.int16 oder np.float32)
+        max_workers: Maximale Anzahl paralleler Worker
         
-        # PyAV für Dekodierung verwenden
-        with io.BytesIO(pages_data) as buf:
-            output_frames = []
-            
+    Returns:
+        Liste von np.ndarray: Extrahierte Audiosegmente für jeden angeforderten Bereich
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_segment = {
+            executor.submit(extract_audio_segment_opus, zarr_group, audio_blob_array, start, end, dtype): (start, end) 
+            for start, end in segments
+        }
+        
+        results = {}
+        for future in future_to_segment:
+            segment = future_to_segment[future]
             try:
-                container = av.open(buf)
-                stream = container.streams.audio[0]
-                
-                for frame in container.decode(stream):
-                    # Konvertiere zu einem Numpy-Array
-                    frame_array = frame.to_ndarray()
-                    output_frames.append(frame_array)
-                    
-                container.close()
-                
-                if output_frames:
-                    # Kombination aller Frames
-                    decoded_audio = np.vstack(output_frames) if len(output_frames) > 1 else output_frames[0]
-                    return decoded_audio
-                else:
-                    return np.array([])
-                    
+                results[segment] = future.result()
             except Exception as e:
-                print(f"Fehler beim Dekodieren der Opus-Daten: {e}")
-                return np.array([])
-    
-    def decode_samples(self, start_sample, end_sample):
-        """
-        Dekodiert einen spezifischen Bereich von Samples
-        
-        Args:
-            start_sample: Erstes Sample, das dekodiert werden soll (inklusive)
-            end_sample: Letztes Sample, das dekodiert werden soll (exklusive)
-            
-        Returns:
-            Numpy-Array mit dekodierten Audiodaten
-        """
-        # Finde die Pages, die die angeforderten Samples enthalten
-        sample_positions = self.index['sample_pos']
-        
-        # Binary Search für die erste Page, die start_sample enthält oder darüber liegt
-        start_idx = np.searchsorted(sample_positions, start_sample, side='right') - 1
-        start_idx = max(0, start_idx)  # Sicherstellen, dass wir nicht unter 0 gehen
-        
-        # Finde alle Pages bis zur letzten benötigten
-        end_idx = np.searchsorted(sample_positions, end_sample, side='right')
-        end_idx = min(end_idx, len(self.index) - 1)
-        
-        # Pages, die dekodiert werden müssen (inkl. Überlappung für korrekte Dekodierung)
-        required_pages = list(range(start_idx, end_idx + 1))
-        
-        # Für Opus: Wir brauchen möglicherweise eine vorherige Page für die korrekte Dekodierung
-        if start_idx > 0:
-            required_pages.insert(0, start_idx - 1)
-        
-        # Dekodiere die Pages
-        decoded_audio = self.decode_pages(required_pages)
-        
-        if decoded_audio.size == 0:
-            return np.array([])
-            
-        # Schneide die resultierenden Audiodaten auf den genauen Bereich zu
-        first_page_sample = sample_positions[start_idx]
-        start_offset = start_sample - first_page_sample
-        end_offset = start_offset + (end_sample - start_sample)
-        
-        # Stelle sicher, dass wir nicht aus dem Array herausgehen
-        if start_offset < 0:
-            start_offset = 0
-        if end_offset > decoded_audio.shape[0]:
-            end_offset = decoded_audio.shape[0]
-            
-        trimmed_audio = decoded_audio[start_offset:end_offset]
-        return trimmed_audio
-    
-    def parallel_decode_chunks(self, chunks, max_workers=4):
-        """
-        Dekodiert mehrere Chunks parallel
-        
-        Args:
-            chunks: Liste von (start_sample, end_sample)-Tupeln
-            max_workers: Maximale Anzahl paralleler Worker
-            
-        Returns:
-            Liste von Numpy-Arrays mit dekodierten Audiodaten
-        """
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_chunk = {
-                executor.submit(self.decode_samples, start, end): (start, end) 
-                for start, end in chunks
-            }
-            
-            results = {}
-            for future in future_to_chunk:
-                chunk = future_to_chunk[future]
-                try:
-                    results[chunk] = future.result()
-                except Exception as e:
-                    print(f"Fehler beim Dekodieren des Chunks {chunk}: {e}")
-                    results[chunk] = np.array([])
-                    
-            # Sortiere nach der ursprünglichen Chunk-Reihenfolge
-            return [results[chunk] for chunk in chunks]
-
-
-# Beispiel zur Verwendung
-def decode_opus_snippet(zarr_path, start_sample, end_sample):
-    """Dekodiert einen bestimmten Bereich aus einer Ogg-Opus-Datei"""
-    decoder = OggOpusDecoder(zarr_path)
-    audio = decoder.decode_samples(start_sample, end_sample)
-    print(f"Dekodierte Audiodaten: {audio.shape}")
-    return audio
-
-def parallel_decode_opus_snippets(zarr_path, chunks, max_workers=4):
-    """Dekodiert mehrere Bereiche parallel aus einer Ogg-Opus-Datei"""
-    decoder = OggOpusDecoder(zarr_path)
-    audio_chunks = decoder.parallel_decode_chunks(chunks, max_workers)
-    return audio_chunks
-
-
-# Beispielaufruf:
-# audio = decode_opus_snippet('mein_zarr_store.zarr', 10000, 20000)
-
-# # Parallel mehrere Chunks dekodieren
-# chunks = [(10000, 20000), (30000, 40000), (50000, 60000)]
-# audio_chunks = parallel_decode_opus_snippets('mein_zarr_store.zarr', chunks)
+                logger.error(f"Fehler beim Extrahieren des Segments {segment}: {e}")
+                results[segment] = np.array([])
+                
+        # Sortiere nach der ursprünglichen Segment-Reihenfolge
+        return [results[segment] for segment in segments]
