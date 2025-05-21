@@ -1,13 +1,13 @@
 import numpy as np
 import struct
 import zarr
-import logging
 import subprocess
 import tempfile
 from .exceptions import OggImportError
 
-# get the module logger
-logger = logging.getLogger(__name__)
+# import and initialize logging
+from zarrwlr.logsetup import get_logger
+logger = get_logger()
 
 # Konstanten für Ogg-Container
 OGG_PAGE_HEADER_SIZE = 27

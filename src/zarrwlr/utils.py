@@ -8,6 +8,10 @@ import os
 from types import MappingProxyType
 from collections.abc import Mapping
 
+# import and initialize logging
+from zarrwlr.logsetup import get_logger
+logger = get_logger()
+
 def next_numeric_group_name(zarr_group: zarr.Group) -> str:
     """next_numeric_group_name Return next free number for numbered groups.
 

@@ -9,13 +9,21 @@ import numpy as np
 import zarr
 import datetime
 
-# Importierte Module
+import zarrwlr
+from zarrwlr.config import Config
+from zarrwlr.types import LogLevel
+
+
+# Logging-Level für Tests setzen
+Config.set_logging(LogLevel.DEBUG, debug=True)
+
 from zarrwlr.aimport import (
+    create_original_audio_group,
     import_original_audio_file,
     extract_audio_segment,
     parallel_extract_audio_segments
 )
-from zarrwlr.config import Config
+
 
 # ##########################################################
 #
@@ -32,7 +40,7 @@ def prepare_testresult_dir():
     os.system(f"rm -rf {str(TEST_RESULTS_DIR)}/*")
     os.system(f"mkdir -p {str(TEST_RESULTS_DIR)}")
 
-def prepare_zarr_database() -> zarr.Group:
+def prepare_zarr_database():
     # Verzeichnis erstellen, falls es nicht existiert
     if not TEST_RESULTS_DIR.exists():
         TEST_RESULTS_DIR.mkdir(parents=True)
@@ -42,15 +50,28 @@ def prepare_zarr_database() -> zarr.Group:
         shutil.rmtree(ZARR3_STORE_DIR)
     
     # Neue Zarr-Datenbank erstellen
-    store = zarr.storage.LocalStore(root=ZARR3_STORE_DIR)
-    root = zarr.create_group(store=store)
-    audio_import_grp = root.create_group('audio_imports')
-    
-    # Attribute setzen, damit es als Original-Audio-Gruppe erkannt wird
-    audio_import_grp.attrs["magic_id"] = Config.original_audio_group_magic_id
-    audio_import_grp.attrs["version"] = Config.original_audio_group_version
-    
-    return audio_import_grp
+    create_original_audio_group(store_path = ZARR3_STORE_DIR, group_path = 'audio_imports')
+
+Leider kommen trotz Überarbeitung des Loggers hier keine Loggings:
+
+prepare_testresult_dir()
+prepare_zarr_database()
+exit(0)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def get_test_files() -> list[pathlib.Path]:
     test_files = [

@@ -2,7 +2,6 @@
 
 import numpy as np
 import subprocess
-import logging
 import pathlib
 import hashlib
 import json
@@ -11,6 +10,10 @@ import yaml
 import tempfile
 from mutagen import File as MutagenFile
 import zarr
+
+# import and initialize logging
+from zarrwlr.logsetup import get_logger
+logger = get_logger()
 
 # Import the functions from flacbyteblob and opusbyteblob
 from .flacbyteblob import (
@@ -29,14 +32,12 @@ from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionEr
 from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
 
 STD_TEMP_DIR = "/tmp"
-AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array"
-
-# get the module logger   
-logger = logging.getLogger(__name__)
+AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array" 
 
 def _check_ffmpeg_tools():
     """Check if ffmpeg and ffprobe are installed and callable."""
     tools = ["ffmpeg", "ffprobe"]
+    logger.debug("Check avalability of ffmpeg and ffprobe tools during import of module...")
 
     for tool in tools:
         try:
@@ -44,36 +45,47 @@ def _check_ffmpeg_tools():
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.error(f"Missing Command line tool {tool}. Please install ist.")
             exit(1)
+    logger.info("ffmpeg and ffprobe tools: Installed and successfully checked.")
 
 # We do this check during import:
 _check_ffmpeg_tools()
 
 
-def create_original_audio_group(store_path: str|pathlib.Path, group_path:zarr.Group|None = None):
+def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pathlib.Path|None = None):
     """
     Erstellt eine neue Original-Audio-Gruppe im Zarr-Store oder prüft eine existierende.
     
     Args:
-        store_path: Pfad zum Zarr -Store
+        store_path: Pfad zum Zarr-Store
         group_path: Pfad zur Gruppe innerhalb des Stores (optional)
     """
+    store_path = str(pathlib.Path(store_path))  # Konvertiere zu absolutem Pfad-String
+    
+    # Zarr-Pfade innerhalb des Stores müssen als Strings vorliegen
+    zarr_group_path = None
+    if group_path is not None:
+        zarr_group_path = str(group_path)  # Zarr erwartet String-Pfade
+    
+    logger.debug(f"'create_original_audio_group' called. Try to open store an root path with {store_path=} and {group_path=}...")
     store = zarr.storage.LocalStore(store_path)
     root = zarr.open_group(store, mode='a')
-
-    def initialize_group(grp:zarr.Group):
+    
+    def initialize_group(grp: zarr.Group):
+        logger.debug("Initialize Zarr group containing all original audio imports...")
         grp.attrs["magic_id"] = Config.original_audio_group_magic_id
-        grp.attrs["version"]  = Config.original_audio_group_version
-
-    if group_path:
-        if group_path in root:
-            # group exist; check, if the right type
-            check_if_original_audio_group(group = root[group_path])
+        grp.attrs["version"] = Config.original_audio_group_version
+        logger.debug(f"Initializing done. {grp.attrs['magic_id']=} and {grp.attrs['version']}")
+    
+    if zarr_group_path is not None:
+        if zarr_group_path in root:
+            # group exist; check if the right type
+            check_if_original_audio_group(group=root[zarr_group_path])
             return
         else:
             # create this group
             created = False
             try:
-                group = root.create_group(group_path)
+                group = root.create_group(zarr_group_path)
                 created = True
                 initialize_group(group)
             except Exception:
@@ -82,8 +94,7 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path:zarr.Gr
                 raise  # raise original exception
     else:
         # root is this group
-        group = root
-        check_if_original_audio_group(group = root[group_path])
+        check_if_original_audio_group(group=root)
 
 def check_if_original_audio_group(group:zarr.Group):
     """
@@ -545,7 +556,6 @@ def import_original_audio_file(
         new_original_audio_grp.attrs["original_audio_data_array_version"] = Config.original_audio_data_array_version
 
         # Save Original-Audio-Meta data to the group
-        # These data specify the source and not the following file blob!
         new_original_audio_grp.attrs["type"]                    = "original_audio_file"
         new_original_audio_grp.attrs["encoding"]                = target_codec
         new_original_audio_grp.attrs["base_features"]           = base_features

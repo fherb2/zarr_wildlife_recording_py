@@ -1,6 +1,10 @@
 
 from zarr.errors import BaseZarrError
 
+# import and initialize logging
+from zarrwlr.logsetup import get_logger
+logger = get_logger()
+
 
 class Doublet(Exception):
     """Error of some dublicat."""

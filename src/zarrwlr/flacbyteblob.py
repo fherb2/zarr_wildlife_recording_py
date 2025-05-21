@@ -5,10 +5,10 @@ import soundfile as sf
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import os
-import logging
 
-# get the module logger
-logger = logging.getLogger(__name__)
+# import and initialize logging
+from zarrwlr.logsetup import get_logger
+logger = get_logger()
 
 def build_flac_index(zarr_group, audio_blob_array):
     """
