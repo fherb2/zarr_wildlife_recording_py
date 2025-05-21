@@ -17,8 +17,8 @@ class Config:
                             "original_audio_chunks_per_shard",
                          ]
 
-    log_level: LogLevel = LogLevel.ERROR
-    debug: bool = False # special debugging mode for additional deep inspecting via print/log messages
+    log_level: LogLevel = LogLevel.DEBUG
+    debug: bool = True # special debugging mode for additional deep inspecting via print/log messages
     original_audio_chunk_size: int       = int(2**20) # 1 MByte (don't use small chunks: too slowly!)
     original_audio_chunks_per_shard: int = int(50*2**20 / original_audio_chunk_size) # 50 MByte is a good value for access for both: local resources and network
 
@@ -45,6 +45,6 @@ class Config:
                 raise AttributeError(f"Invalid config key: {key}. No such key.")
             
     @classmethod
-    def set_logging(cls, log_level:LogLevel, debug:bool=False) -> None:
-        cls.set(log_level=log_level)
-        cls.set(debug=debug)
+    def set_logging(cls, log_level: LogLevel, debug: bool = False) -> None:
+        """Setzt Logging-Parameter. Keine Neuinitialisierung nötig."""
+        cls.set(log_level=log_level, debug=debug)

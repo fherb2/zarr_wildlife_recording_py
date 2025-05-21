@@ -13,9 +13,19 @@ import zarrwlr
 from zarrwlr.config import Config
 from zarrwlr.types import LogLevel
 
-
-# Logging-Level für Tests setzen
+# Logging konfigurieren - jetzt funktioniert es sofort!
 Config.set_logging(LogLevel.DEBUG, debug=True)
+
+# Logger testen
+from zarrwlr.logsetup import get_logger
+test_logger = get_logger("test")
+
+print("=== LOGGING TEST ===")
+test_logger.error("ERROR message")
+test_logger.warning("WARNING message")
+test_logger.info("INFO message")
+test_logger.debug("DEBUG message")
+
 
 from zarrwlr.aimport import (
     create_original_audio_group,
@@ -52,17 +62,39 @@ def prepare_zarr_database():
     # Neue Zarr-Datenbank erstellen
     create_original_audio_group(store_path = ZARR3_STORE_DIR, group_path = 'audio_imports')
 
-Leider kommen trotz Überarbeitung des Loggers hier keine Loggings:
+# Leider kommen trotz Überarbeitung des Loggers hier keine Loggings:
 
-prepare_testresult_dir()
-prepare_zarr_database()
-exit(0)
-
-
+# prepare_testresult_dir()
+# prepare_zarr_database()
+# exit(0)
 
 
 
 
+
+print("=== DIREKTER LOGGING-TEST ===")
+import logging
+
+# Direkter Test des zarrwlr-Loggers
+zarrwlr_logger = logging.getLogger("zarrwlr")
+print(f"zarrwlr Logger Level: {zarrwlr_logger.level}")
+print(f"zarrwlr Logger Handler: {zarrwlr_logger.handlers}")
+print(f"zarrwlr Logger Filter: {zarrwlr_logger.filters}")
+
+# Direkter Test des aimport-Loggers
+aimport_logger = logging.getLogger("zarrwlr.aimport")
+print(f"aimport Logger Level: {aimport_logger.level}")
+print(f"aimport Logger Handler: {aimport_logger.handlers}")
+
+# Direkte Log-Nachricht senden
+print("\nSende direkte Log-Nachrichten:")
+zarrwlr_logger.error("DIRECT ERROR MESSAGE")
+zarrwlr_logger.warning("DIRECT WARNING MESSAGE") 
+zarrwlr_logger.info("DIRECT INFO MESSAGE")
+zarrwlr_logger.debug("DIRECT DEBUG MESSAGE")
+
+aimport_logger.error("AIMPORT ERROR MESSAGE")
+aimport_logger.debug("AIMPORT DEBUG MESSAGE")
 
 
 
