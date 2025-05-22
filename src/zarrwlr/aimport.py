@@ -351,14 +351,18 @@ class FileMeta:
     Vollständige audiorelevante Metainformationen einer Datei über ffprobe und mutagen.
     
     Args:
-        file: Pfad zur Audiodatei
-        audio_only: Wenn True, werden nur Audio-Streams erfasst
+        file: Pfad zur Datei mit Audio Streams
     """
-    def __init__(self, file: str|pathlib.Path, audio_only:bool=True):
+    def __init__(self, file: str|pathlib.Path):
         file = pathlib.Path(file)
+        logger.debug(f"Reading meta information from media file {file.name} requested.")
         # from ffprobe
         # ------------
         self.meta = {"ffprobe": self._ffprobe_info(file)}
+        if len(self.meta["ffprobe"].get("streams", [])) == 0:
+            logger.warning(f"No audio streams found by ffprobe in file {file.name}.")
+        else:
+            logger.debug(f"Found {len(self.meta["ffprobe"].get("streams", []))} audio streams found by ffprobe in file {file.name}.")
         # via mutagen
         # -----------
         self.meta["mutagen"] = self._mutagen_info(file)
@@ -458,6 +462,9 @@ def _get_source_params(input_file: pathlib.Path) -> dict:
     ]
     out = subprocess.check_output(args=cmd)
     info = json.loads(out)
+    if ('streams' not in info) or (len(info["streams"]) == 0):
+        logger.error(f"ffprobe doesn't found any media stream information in file {input_file.name}.")
+        raise ValueError(f"ffprobe doesn't found any media stream information in file {input_file.name}.")
     source_params = {
                 "sampling_rate": int(info['streams'][0]['sample_rate']) if 'sample_rate' in info['streams'][0] else None,
                 "is_opus": info['streams'][0]['codec_name'] == "opus",
@@ -488,19 +495,22 @@ def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
 
     if target_codec == "flac":
         if normalized_fmt in flac_supported:
-            return normalized_fmt
-        # fallback
-        return "s32"
-
+            retval = normalized_fmt
+        else:
+            # fallback
+            retval = "s32"
     elif target_codec == "opus":
         # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
         if normalized_fmt in opus_supported:
-            return normalized_fmt
+            retval = normalized_fmt
         # fallback auf float oder s16
-        return "flt" if normalized_fmt.startswith("f") else "s16"
-
+        else:
+            retval =  "flt" if normalized_fmt.startswith("f") else "s16"
     else:
+        logger.error(f"Could not find any convertion value for '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
         raise NotImplementedError(f"Unsupported codec: {target_codec}")
+    logger.debug(f"Could find the sample format '{retval}' as convertion from '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
+    return retval
 
 
 def import_original_audio_file(
