@@ -2,12 +2,11 @@
 
 """zarrwlr package initialization."""
 
-# Logging wird automatisch bei der ersten Verwendung initialisiert
-# Kein expliziter setup_module_logging() Aufruf nötig!
+from .logsetup import get_module_logger
 
-# Optional: Paket-Logger für Initialisierungs-Messages
-from .logsetup import package_logger
-package_logger.info("zarrwlr package loaded")
+# Get logger for this module
+logger = get_module_logger(__file__)
+
 
 
 # Diese Funktionen werden zur Verfügung gestellt, wenn man 'import zarrwlr' angibt.
@@ -29,3 +28,4 @@ package_logger.info("zarrwlr package loaded")
 
 # Relative Pfade verwenden ist sicherer!
 
+logger.info("zarrwlr package loaded.")

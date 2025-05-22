@@ -7,8 +7,8 @@ import tempfile
 import os
 
 # import and initialize logging
-from zarrwlr.logsetup import get_logger
-logger = get_logger()
+from .logsetup import get_module_logger
+logger = get_module_logger(__file__)
 
 def build_flac_index(zarr_group, audio_blob_array):
     """

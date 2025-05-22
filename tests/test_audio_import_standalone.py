@@ -12,19 +12,18 @@ import datetime
 import zarrwlr
 from zarrwlr.config import Config
 from zarrwlr.types import LogLevel
+from zarrwlr.logsetup import get_module_logger
 
 # Logging konfigurieren - jetzt funktioniert es sofort!
-Config.set_logging(LogLevel.DEBUG, debug=True)
-
-# Logger testen
-from zarrwlr.logsetup import get_logger
-test_logger = get_logger("test")
+Config.set(log_level=LogLevel.DEBUG)
+# Get logger for this module
+logger = get_module_logger(__file__)
 
 print("=== LOGGING TEST ===")
-test_logger.error("ERROR message")
-test_logger.warning("WARNING message")
-test_logger.info("INFO message")
-test_logger.debug("DEBUG message")
+logger.error("ERROR message")
+logger.warning("WARNING message")
+logger.info("INFO message")
+logger.debug("DEBUG message")
 
 
 from zarrwlr.aimport import (
@@ -71,30 +70,6 @@ def prepare_zarr_database():
 
 
 
-
-print("=== DIREKTER LOGGING-TEST ===")
-import logging
-
-# Direkter Test des zarrwlr-Loggers
-zarrwlr_logger = logging.getLogger("zarrwlr")
-print(f"zarrwlr Logger Level: {zarrwlr_logger.level}")
-print(f"zarrwlr Logger Handler: {zarrwlr_logger.handlers}")
-print(f"zarrwlr Logger Filter: {zarrwlr_logger.filters}")
-
-# Direkter Test des aimport-Loggers
-aimport_logger = logging.getLogger("zarrwlr.aimport")
-print(f"aimport Logger Level: {aimport_logger.level}")
-print(f"aimport Logger Handler: {aimport_logger.handlers}")
-
-# Direkte Log-Nachricht senden
-print("\nSende direkte Log-Nachrichten:")
-zarrwlr_logger.error("DIRECT ERROR MESSAGE")
-zarrwlr_logger.warning("DIRECT WARNING MESSAGE") 
-zarrwlr_logger.info("DIRECT INFO MESSAGE")
-zarrwlr_logger.debug("DIRECT DEBUG MESSAGE")
-
-aimport_logger.error("AIMPORT ERROR MESSAGE")
-aimport_logger.debug("AIMPORT DEBUG MESSAGE")
 
 
 

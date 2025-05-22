@@ -6,8 +6,8 @@ import tempfile
 from .exceptions import OggImportError
 
 # import and initialize logging
-from zarrwlr.logsetup import get_logger
-logger = get_logger()
+from .logsetup import get_module_logger
+logger = get_module_logger(__file__)
 
 # Konstanten für Ogg-Container
 OGG_PAGE_HEADER_SIZE = 27

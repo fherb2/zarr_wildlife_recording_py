@@ -2,8 +2,8 @@
 from zarr.errors import BaseZarrError
 
 # import and initialize logging
-from zarrwlr.logsetup import get_logger
-logger = get_logger()
+from .logsetup import get_module_logger
+logger = get_module_logger(__file__)
 
 
 class Doublet(Exception):

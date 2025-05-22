@@ -12,8 +12,8 @@ from mutagen import File as MutagenFile
 import zarr
 
 # import and initialize logging
-from zarrwlr.logsetup import get_logger
-logger = get_logger()
+from .logsetup import get_module_logger
+logger = get_module_logger(__file__)
 
 # Import the functions from flacbyteblob and opusbyteblob
 from .flacbyteblob import (
