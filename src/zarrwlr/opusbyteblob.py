@@ -8,6 +8,8 @@ from .exceptions import OggImportError
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
+logger.debug("Module loading....")
+
 
 # Konstanten für Ogg-Container
 OGG_PAGE_HEADER_SIZE = 27
@@ -231,3 +233,5 @@ def parallel_extract_audio_segments_opus(zarr_group, audio_blob_array, segments,
                 
         # Sortiere nach der ursprünglichen Segment-Reihenfolge
         return [results[segment] for segment in segments]
+
+logger.debug("Module loaded.")

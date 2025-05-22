@@ -14,22 +14,24 @@ import zarr
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
+logger.debug("Module loading...")
+
 
 # Import the functions from flacbyteblob and opusbyteblob
-from .flacbyteblob import (
+from .flacbyteblob import (  # noqa: E402
     build_flac_index, 
     extract_audio_segment_flac, 
     parallel_extract_audio_segments_flac
 )
-from .opusbyteblob import (
+from .opusbyteblob import (  # noqa: E402
     build_opus_index, 
     extract_audio_segment_opus, 
     parallel_extract_audio_segments_opus
 )
-from .utils import next_numeric_group_name, remove_zarr_group_recursive
-from .config import Config
-from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError
-from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
+from .utils import next_numeric_group_name, remove_zarr_group_recursive  # noqa: E402
+from .config import Config  # noqa: E402
+from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
+from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
 
 STD_TEMP_DIR = "/tmp"
 AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array" 
@@ -45,10 +47,9 @@ def _check_ffmpeg_tools():
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.error(f"Missing Command line tool {tool}. Please install ist.")
             exit(1)
-    logger.info("ffmpeg and ffprobe tools: Installed and successfully checked.")
+    logger.info("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
 
-# We do this check during import:
-_check_ffmpeg_tools()
+
 
 
 def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pathlib.Path|None = None):
@@ -59,15 +60,15 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
         store_path: Pfad zum Zarr-Store
         group_path: Pfad zur Gruppe innerhalb des Stores (optional)
     """
-    store_path = str(pathlib.Path(store_path))  # Konvertiere zu absolutem Pfad-String
+    store_path = pathlib.Path(store_path).resolve()  # Konvertiere zu absolutem Pfad-String
     
     # Zarr-Pfade innerhalb des Stores müssen als Strings vorliegen
     zarr_group_path = None
     if group_path is not None:
         zarr_group_path = str(group_path)  # Zarr erwartet String-Pfade
     
-    logger.debug(f"'create_original_audio_group' called. Try to open store an root path with {store_path=} and {group_path=}...")
-    store = zarr.storage.LocalStore(store_path)
+    logger.debug(f"'create_original_audio_group' called. Try to open store {store_path=} and audio group path {group_path=}...")
+    store = zarr.storage.LocalStore(str(store_path))
     root = zarr.open_group(store, mode='a')
     
     def initialize_group(grp: zarr.Group):
@@ -78,11 +79,16 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
     
     if zarr_group_path is not None:
         if zarr_group_path in root:
-            # group exist; check if the right type
-            check_if_original_audio_group(group=root[zarr_group_path])
+            # group exist
+            logger.debug(f"Zarr group {zarr_group_path} exist. Check if it is a valid 'original audio' group...")
+            grp = root[zarr_group_path]
+            assert isinstance(grp, zarr.Group), f"Expected zarr.Group, got {type(grp)=}"
+            check_if_original_audio_group(group=grp)
+            logger.debug(f"Zarr group {zarr_group_path} is a valid 'original audio' group.")
             return
         else:
             # create this group
+            logger.debug(f"Zarr group {zarr_group_path} doesn't exist. Try to create...")
             created = False
             try:
                 group = root.create_group(zarr_group_path)
@@ -92,9 +98,13 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
                 if created:
                     remove_zarr_group_recursive(root.store, group.path)
                 raise  # raise original exception
+            logger.info(f"Zarr group {zarr_group_path} as 'original audio' group created.")
     else:
         # root is this group
+        logger.debug(f"Zarr root {store_path} is given as 'original audio' group. Check if it is a valid 'original audio' group...")
         check_if_original_audio_group(group=root)
+        logger.debug(f"Zarr group {zarr_group_path} is a valid 'original audio' group.")
+
 
 def check_if_original_audio_group(group:zarr.Group):
     """
@@ -107,6 +117,7 @@ def check_if_original_audio_group(group:zarr.Group):
         ZarrComponentVersionError: Wenn die Gruppenversion nicht mit der erwarteten Version übereinstimmt
         ZarrGroupMismatch: Wenn die Gruppe keine Original-Audio-Gruppe ist
     """
+    # no logging here: will be done at calling positions
     grp_ok =     ("magic_id" in group.attrs) \
              and (group.attrs["magic_id"] == Config.original_audio_group_magic_id) \
              and ("version" in group.attrs)
@@ -127,16 +138,20 @@ def audio_codec_compression(codec_name: str) -> AudioCompression:
         AudioCompression: Kompressionstyp (UNCOMPRESSED, LOSSLESS_COMPRESSED, LOSSY_COMPRESSED, UNKNOWN)
     """
     if codec_name.startswith("pcm_"):
+        logger.debug(f"Audio compression of {codec_name} checked. Is: uncompressed.")
         return AudioCompression.UNCOMPRESSED
     
     lossless_codecs = {"flac", "alac", "wavpack", "ape", "tak"}
     if codec_name in lossless_codecs:
+        logger.debug(f"Audio compression of {codec_name} checked. Is: lossless compressed.")
         return AudioCompression.LOSSLESS_COMPRESSED
     
     lossy_codecs = {"mp3", "aac", "opus", "ogg", "ac3", "eac3", "wma"}
     if codec_name in lossy_codecs:
+        logger.debug(f"Audio compression of {codec_name} checked. Is: lossy compressed.")
         return AudioCompression.LOSSY_COMPRESSED
     
+    logger.error(f"Audio compression of {codec_name} checked. Is not an implemented code to recognize the type. If necessary to recognize this code, it has to be added to the module function 'audio_codec_compression()'.")
     return AudioCompression.UNKNOWN
 
 def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatures:
@@ -289,6 +304,7 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
 #     logger.error(f"Fehler beim Verarbeiten der ffprobe-Ausgabe: {e}")
 #     # Fallback-Werte setzen
 
+    logger.debug(f"Base features of the audio file {file_path.name} read out: {base_features}")
     return base_features
 
 def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
@@ -305,6 +321,7 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
     Returns:
         bool: True, wenn die Audiodatei bereits in der Gruppe existiert
     """
+    logger.debug(f"Check if audio file {base_features.FILENAME} is already in the Zarr database of original audio files...")
     for group_name in zarr_original_audio_group:
         # we need check this group only the name is only a number
         if group_name.isdigit():
@@ -316,11 +333,17 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
                     # Check if the base_features are the same:
                     bf:AudioFileBaseFeatures = zarr_audio_database_grp.attrs["base_features"]
                     if (base_features.SH256) == bf["SH256"]:
+                        logger.warning(f"Hash of audio file {base_features.FILENAME} found in database.")
                         if sh246_check_only:
+                            logger.warning(f"Since the 'sh246_check_only' flag of 'is_audio_in_original_audio_group()' is set, we recognize the file {base_features.FILENAME} as 'is already in the database'. Probably, importing of this file will be skipped during the next steps.")
                             return True
                         elif    (base_features.FILENAME   == bf["FILENAME"]) \
                             and (base_features.SIZE_BYTES == bf["SIZE_BYTES"]):
+                            logger.warning(f"Not only the hash of {base_features.FILENAME} is the same. Also filename and the size are the same values as an already imported file in the database. Probably, importing of this file will be skipped during the next steps.")
                             return True
+                        else:
+                            logger.warning(f"Audio file {base_features.FILENAME} has differnces in the file name or file size, but the hash is the same. So, it is not recognized as 'already found in database'. But, be carefully with this import! Maybe, the file was only renamed in the meantime between the firt import and now. It is really very, very (!) extremly seldom that the hash has the same value for different files!")
+    logger.debug(f"Audio file {base_features.FILENAME} finally not recognized as 'already imported'.")
     return False
 
 class FileMeta:
@@ -700,3 +723,8 @@ def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_wo
         return parallel_extract_audio_segments_opus(zarr_group, audio_blob_array, segments, dtype, max_workers)
     else:
         raise ValueError(f"Nicht unterstützter Codec: {codec}")
+    
+
+logger.debug("Module loaded.")
+# We do this check during import:
+_check_ffmpeg_tools()

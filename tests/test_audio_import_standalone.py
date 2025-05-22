@@ -19,13 +19,6 @@ Config.set(log_level=LogLevel.DEBUG)
 # Get logger for this module
 logger = get_module_logger(__file__)
 
-print("=== LOGGING TEST ===")
-logger.error("ERROR message")
-logger.warning("WARNING message")
-logger.info("INFO message")
-logger.debug("DEBUG message")
-
-
 from zarrwlr.aimport import (
     create_original_audio_group,
     import_original_audio_file,
@@ -44,28 +37,30 @@ from zarrwlr.aimport import (
 TEST_RESULTS_DIR = pathlib.Path(__file__).parent.resolve() / "testresults"
 ZARR3_STORE_DIR = TEST_RESULTS_DIR / "zarr3-store"
 
-def prepare_testresult_dir():
-    # remove content in result directory or create directory
-    os.system(f"rm -rf {str(TEST_RESULTS_DIR)}/*")
-    os.system(f"mkdir -p {str(TEST_RESULTS_DIR)}")
+def clean_up_testresult_dir():
+    logger.debug(f"Remove old test-result directory: {str(TEST_RESULTS_DIR)}")
+    os.system(f"rm -rf {str(TEST_RESULTS_DIR)}")
 
 def prepare_zarr_database():
     # Verzeichnis erstellen, falls es nicht existiert
     if not TEST_RESULTS_DIR.exists():
+        logger.debug(f"Create {TEST_RESULTS_DIR.resolve()}")
         TEST_RESULTS_DIR.mkdir(parents=True)
     
     # Bestehende Zarr-Datenbank löschen, falls vorhanden
     if ZARR3_STORE_DIR.exists():
+        logger.debug("Remove old database.")
         shutil.rmtree(ZARR3_STORE_DIR)
     
     # Neue Zarr-Datenbank erstellen
+    logger.info(f"Create new database at {ZARR3_STORE_DIR} with group 'audio_imports'")
     create_original_audio_group(store_path = ZARR3_STORE_DIR, group_path = 'audio_imports')
 
-# Leider kommen trotz Überarbeitung des Loggers hier keine Loggings:
 
-# prepare_testresult_dir()
-# prepare_zarr_database()
-# exit(0)
+clean_up_testresult_dir()
+prepare_zarr_database()
+
+exit(0)
 
 
 

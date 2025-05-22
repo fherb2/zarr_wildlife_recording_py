@@ -9,6 +9,8 @@ import os
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
+logger.debug("Module loading...")
+
 
 def build_flac_index(zarr_group, audio_blob_array):
     """
@@ -196,3 +198,5 @@ def parallel_extract_audio_segments_flac(zarr_group, audio_blob_array, segments,
                 
         # Sortiere nach der ursprünglichen Segment-Reihenfolge
         return [results[segment] for segment in segments]
+
+logger.debug("Module loaded.")

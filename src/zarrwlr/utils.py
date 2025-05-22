@@ -11,6 +11,7 @@ from collections.abc import Mapping
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
+logger.debug("Module loading...")
 
 def next_numeric_group_name(zarr_group: zarr.Group) -> str:
     """next_numeric_group_name Return next free number for numbered groups.
@@ -197,4 +198,4 @@ def assert_zarr_snapshot_equals(actual: dict, expected: dict, path=""):
         if actual != expected:
             raise AssertionError(f"Value mismatch at {path or '<root>'}: {actual!r} != {expected!r}")
 
-
+logger.debug("Module loaded.")

@@ -4,6 +4,7 @@ import logging
 import logging.handlers
 import pathlib
 import sys
+import textwrap
 from typing import Dict, Optional
 from .types import LogLevel
 
@@ -32,12 +33,20 @@ class LoggingManager:
         return level_mapping[log_level]
     
     @classmethod
-    def _create_formatter(cls) -> logging.Formatter:
-        """Create a consistent log formatter"""
-        return logging.Formatter(
-            fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+    def _create_formatter(cls, for_console: bool = True) -> logging.Formatter:
+        """Create formatter - colored for console, plain for files"""
+        if for_console:
+            return ColoredDotMillisecondFormatter(
+                fmt='%(asctime)s\n%(levelname)s (%(name)s): %(message)s',
+                use_colors=True,
+                use_symbols=True,
+                width=120
+            )
+        else:
+            return DotMillisecondFormatter(
+                fmt='%(asctime)s\n%(levelname)s (%(name)s): %(message)s',
+                width=120
+            )
     
     @classmethod
     def _setup_file_handler(cls, log_filepath: pathlib.Path) -> Optional[logging.Handler]:
@@ -53,7 +62,7 @@ class LoggingManager:
                 backupCount=5,
                 encoding='utf-8'
             )
-            file_handler.setFormatter(cls._create_formatter())
+            file_handler.setFormatter(cls._create_formatter(for_console=False))
             return file_handler
             
         except (OSError, PermissionError) as e:
@@ -64,7 +73,7 @@ class LoggingManager:
     def _setup_console_handler(cls) -> logging.Handler:
         """Setup console handler for logging"""
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(cls._create_formatter())
+        console_handler.setFormatter(cls._create_formatter(for_console=True))
         return console_handler
     
     @classmethod
@@ -193,6 +202,249 @@ class LoggingManager:
                 logger.setLevel(logging.CRITICAL + 1)  # Disable logging
         
         return cls._loggers[module_name]
+    
+class DotMillisecondFormatter(logging.Formatter):
+    INDENT_SIZE = 2
+    DEFAULT_WIDTH = 120
+    
+    def __init__(self, *args, width=DEFAULT_WIDTH, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.indent = ' ' * self.INDENT_SIZE
+        self.width = width
+
+
+    def formatTime(self, record, datefmt=None):
+        return super().formatTime(record, datefmt).replace(',', '.')
+    
+    def format(self, record):
+        formatted = super().format(record)
+        lines = formatted.split('\n')
+        
+        if len(lines) > 1:
+            # Erste Zeile bleibt unverändert
+            result_lines = [lines[0]]
+            
+            # Alle Message-Zeilen verarbeiten (ab Index 1)
+            for line in lines[1:]:
+                # Bereits vorhandene Einrückung entfernen falls vorhanden
+                clean_line = line.lstrip()
+                
+                # Verfügbare Breite berechnen (Gesamtbreite minus Einrückung)
+                available_width = self.width - self.INDENT_SIZE
+                
+                if len(clean_line) <= available_width:
+                    # Zeile passt, einfach einrücken
+                    result_lines.append(self.indent + clean_line)
+                else:
+                    # Zeile umbrechen mit textwrap
+                    wrapped_lines = textwrap.wrap(
+                        clean_line, 
+                        width=available_width,
+                        break_long_words=True,
+                        break_on_hyphens=True
+                    )
+                    # Alle umgebrochenen Zeilen einrücken
+                    for wrapped_line in wrapped_lines:
+                        result_lines.append(self.indent + wrapped_line)
+            
+            formatted = '\n'.join(result_lines)
+        
+        return formatted
+
+
+
+class ColoredDotMillisecondFormatter(logging.Formatter):
+    """Enhanced formatter with color support and improved readability"""
+    
+    INDENT_SIZE = 2
+    DEFAULT_WIDTH = 120
+    
+    # ANSI Color Codes
+    class Colors:
+        # Standard colors
+        BLACK = '\033[30m'
+        RED = '\033[31m'
+        GREEN = '\033[32m'
+        YELLOW = '\033[33m'
+        BLUE = '\033[34m'
+        MAGENTA = '\033[35m'
+        CYAN = '\033[36m'
+        WHITE = '\033[37m'
+        
+        # Bright colors
+        BRIGHT_BLACK = '\033[90m'    # Gray
+        BRIGHT_RED = '\033[91m'
+        BRIGHT_GREEN = '\033[92m'
+        BRIGHT_YELLOW = '\033[93m'
+        BRIGHT_BLUE = '\033[94m'
+        BRIGHT_MAGENTA = '\033[95m'
+        BRIGHT_CYAN = '\033[96m'
+        BRIGHT_WHITE = '\033[97m'
+        
+        # Text styles
+        BOLD = '\033[1m'
+        DIM = '\033[2m'
+        ITALIC = '\033[3m'
+        UNDERLINE = '\033[4m'
+        BLINK = '\033[5m'
+        REVERSE = '\033[7m'
+        STRIKETHROUGH = '\033[9m'
+        
+        # Reset
+        RESET = '\033[0m'
+        
+        # Background colors
+        BG_RED = '\033[41m'
+        BG_GREEN = '\033[42m'
+        BG_YELLOW = '\033[43m'
+        BG_BLUE = '\033[44m'
+    
+    # Level-specific color mapping
+    LEVEL_COLORS: Dict[str, str] = {
+        'DEBUG': Colors.BRIGHT_BLACK,      # Gray
+        'INFO': Colors.BRIGHT_BLUE,        # Bright Blue
+        'WARNING': Colors.BRIGHT_YELLOW,   # Bright Yellow
+        'ERROR': Colors.BRIGHT_RED,        # Bright Red
+        'CRITICAL': Colors.BOLD + Colors.RED + Colors.BG_YELLOW,  # Bold Red on Yellow
+    }
+    
+    # Unicode symbols for better visual distinction
+    LEVEL_SYMBOLS: Dict[str, str] = {
+        'DEBUG': '🔍',      # Magnifying glass
+        'INFO': 'ℹ️ ',       # Information
+        'WARNING': '⚠️ ',    # Warning sign
+        'ERROR': '❌',      # Cross mark
+        'CRITICAL': '🚨',   # Rotating light
+    }
+    
+    def __init__(self, *args, width=DEFAULT_WIDTH, use_colors=None, use_symbols=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.indent = ' ' * self.INDENT_SIZE
+        self.width = width
+        self.use_symbols = use_symbols
+        
+        # Auto-detect color support if not specified
+        if use_colors is None:
+            self.use_colors = self._should_use_colors()
+        else:
+            self.use_colors = use_colors
+    
+    def _should_use_colors(self) -> bool:
+        """Auto-detect if colors should be used based on terminal capabilities"""
+        # Check if output is going to a terminal
+        if not hasattr(sys.stdout, 'isatty') or not sys.stdout.isatty():
+            return False
+        
+        # Check environment variables
+        import os
+        term = os.environ.get('TERM', '').lower()
+        colorterm = os.environ.get('COLORTERM', '').lower()
+        
+        # Common terminals that support colors
+        if any(x in term for x in ['color', 'ansi', 'xterm', 'screen']):
+            return True
+        if colorterm in ['truecolor', '24bit']:
+            return True
+        
+        # Windows Terminal and modern terminals
+        if os.name == 'nt':
+            # Windows 10+ supports ANSI colors
+            try:
+                import platform
+                version = platform.version()
+                if version and int(version.split('.')[0]) >= 10:
+                    return True
+            except:
+                pass
+        
+        return False
+
+    def formatTime(self, record, datefmt=None):
+        """Format time with milliseconds using dot separator"""
+        return super().formatTime(record, datefmt).replace(',', '.')
+    
+    def _colorize_level(self, levelname: str) -> str:
+        """Apply color to level name"""
+        if not self.use_colors:
+            return levelname
+        
+        color = self.LEVEL_COLORS.get(levelname, '')
+        symbol = self.LEVEL_SYMBOLS.get(levelname, '') if self.use_symbols else ''
+        
+        if color:
+            return f"{color}{symbol}{levelname}{self.Colors.RESET}"
+        return f"{symbol}{levelname}"
+    
+    # def _add_visual_separators(self, formatted: str) -> str:
+    #     """Add visual separators for better readability"""
+    #     if not self.use_colors:
+    #         return formatted
+        
+    #     # Add subtle separator line for multi-line messages
+    #     lines = formatted.split('\n')
+    #     if len(lines) > 2:  # Only for messages with actual content lines
+    #         # Add a subtle line after the header
+    #         lines.insert(1, f"{self.Colors.DIM}{'─' * min(40, self.width // 3)}{self.Colors.RESET}")
+        
+    #     return '\n'.join(lines)
+    
+    def format(self, record):
+        """Format the log record with colors and proper indentation"""
+        # Store original levelname
+        original_levelname = record.levelname
+        
+        # Apply colors to levelname
+        record.levelname = self._colorize_level(original_levelname)
+        
+        # Get standard formatting
+        formatted = super().format(record)
+        
+        # Restore original levelname (important for other handlers)
+        record.levelname = original_levelname
+        
+        # Process multi-line formatting
+        lines = formatted.split('\n')
+        
+        if len(lines) > 1:
+            result_lines = [lines[0]]  # First line (timestamp + level)
+            
+            # Process message lines (starting from index 1)
+            for line in lines[1:]:
+                clean_line = line.lstrip()
+                available_width = self.width - self.INDENT_SIZE
+                
+                if len(clean_line) <= available_width:
+                    result_lines.append(self.indent + clean_line)
+                else:
+                    # Word wrap long lines
+                    wrapped_lines = textwrap.wrap(
+                        clean_line, 
+                        width=available_width,
+                        break_long_words=True,
+                        break_on_hyphens=True
+                    )
+                    for wrapped_line in wrapped_lines:
+                        result_lines.append(self.indent + wrapped_line)
+            
+            formatted = '\n'.join(result_lines)
+        
+        # Add visual separators for complex messages
+        # formatted = self._add_visual_separators(formatted)
+        
+        return formatted
+
+
+# Alternative: Simple color-only formatter (ohne Symbols)
+class SimpleColorFormatter(ColoredDotMillisecondFormatter):
+    """Simplified version with just colors, no symbols"""
+    
+    def __init__(self, *args, **kwargs):
+        kwargs['use_symbols'] = False
+        super().__init__(*args, **kwargs)
+
+
+
+
 
 
 def get_module_logger(module_file: str) -> logging.Logger:
