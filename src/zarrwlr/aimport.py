@@ -14,7 +14,7 @@ import zarr
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
-logger.debug("Module loading...")
+logger.trace("Module loading...")
 
 
 # Import the functions from flacbyteblob and opusbyteblob
@@ -33,13 +33,16 @@ from .config import Config  # noqa: E402
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
 from .packagetypes import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
 
+logger.trace("Import done.")
+
 STD_TEMP_DIR = "/tmp"
 AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array" 
 
 def _check_ffmpeg_tools():
     """Check if ffmpeg and ffprobe are installed and callable."""
+    logger.trace("'Check for ffmpeg-Tools' requested. Typical position for this during import.")
     tools = ["ffmpeg", "ffprobe"]
-    logger.debug("Check avalability of ffmpeg and ffprobe tools during import of module...")
+    logger.trace("Check avalability of ffmpeg and ffprobe tools during import of module...")
 
     for tool in tools:
         try:
@@ -47,7 +50,7 @@ def _check_ffmpeg_tools():
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.error(f"Missing Command line tool {tool}. Please install ist.")
             exit(1)
-    logger.info("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
+    logger.debug("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
 
 
 
@@ -60,6 +63,7 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
         store_path: Pfad zum Zarr-Store
         group_path: Pfad zur Gruppe innerhalb des Stores (optional)
     """
+    logger.trace(f"'Create original audio group' requested. Parameters: {store_path=}; {group_path=}")
     store_path = pathlib.Path(store_path).resolve()  # Konvertiere zu absolutem Pfad-String
     
     # Zarr-Pfade innerhalb des Stores müssen als Strings vorliegen
@@ -67,20 +71,20 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
     if group_path is not None:
         zarr_group_path = str(group_path)  # Zarr erwartet String-Pfade
     
-    logger.debug(f"'create_original_audio_group' called. Try to open store {store_path=} and audio group path {group_path=}...")
+    logger.trace(f"'create_original_audio_group' called. Try to open store {store_path=} and audio group path {group_path=}...")
     store = zarr.storage.LocalStore(str(store_path))
     root = zarr.open_group(store, mode='a')
     
     def initialize_group(grp: zarr.Group):
-        logger.debug("Initialize Zarr group containing all original audio imports...")
+        logger.trace("Initialize Zarr group containing all original audio imports...")
         grp.attrs["magic_id"] = Config.original_audio_group_magic_id
         grp.attrs["version"] = Config.original_audio_group_version
-        logger.debug(f"Initializing done. {grp.attrs['magic_id']=} and {grp.attrs['version']}")
+        logger.trace(f"Initializing done. {grp.attrs['magic_id']=} and {grp.attrs['version']}")
     
     if zarr_group_path is not None:
         if zarr_group_path in root:
             # group exist
-            logger.debug(f"Zarr group {zarr_group_path} exist. Check if it is a valid 'original audio' group...")
+            logger.trace(f"Zarr group {zarr_group_path} exist. Check if it is a valid 'original audio' group...")
             grp = root[zarr_group_path]
             assert isinstance(grp, zarr.Group), f"Expected zarr.Group, got {type(grp)=}"
             check_if_original_audio_group(group=grp)
@@ -88,7 +92,7 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
             return
         else:
             # create this group
-            logger.debug(f"Zarr group {zarr_group_path} doesn't exist. Try to create...")
+            logger.trace(f"Zarr group {zarr_group_path} doesn't exist. Try to create...")
             created = False
             try:
                 group = root.create_group(zarr_group_path)
@@ -98,12 +102,12 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
                 if created:
                     remove_zarr_group_recursive(root.store, group.path)
                 raise  # raise original exception
-            logger.info(f"Zarr group {zarr_group_path} as 'original audio' group created.")
+            logger.successfull(f"Zarr group {zarr_group_path} as 'original audio' group created.")
     else:
         # root is this group
-        logger.debug(f"Zarr root {store_path} is given as 'original audio' group. Check if it is a valid 'original audio' group...")
+        logger.trace(f"Zarr root {store_path} is given as 'original audio' group. Check if it is a valid 'original audio' group...")
         check_if_original_audio_group(group=root)
-        logger.debug(f"Zarr group {zarr_group_path} is a valid 'original audio' group.")
+        logger.successfull(f"Checked: Zarr group {zarr_group_path} is a valid 'original audio' group.")
 
 
 def check_if_original_audio_group(group:zarr.Group):
@@ -117,6 +121,7 @@ def check_if_original_audio_group(group:zarr.Group):
         ZarrComponentVersionError: Wenn die Gruppenversion nicht mit der erwarteten Version übereinstimmt
         ZarrGroupMismatch: Wenn die Gruppe keine Original-Audio-Gruppe ist
     """
+    logger.trace(f"'ceck if original audio group' with group '{group}' requested.")
     # no logging here: will be done at calling positions
     grp_ok =     ("magic_id" in group.attrs) \
              and (group.attrs["magic_id"] == Config.original_audio_group_magic_id) \
@@ -137,6 +142,7 @@ def audio_codec_compression(codec_name: str) -> AudioCompression:
     Returns:
         AudioCompression: Kompressionstyp (UNCOMPRESSED, LOSSLESS_COMPRESSED, LOSSY_COMPRESSED, UNKNOWN)
     """
+    logger.trace(f"'Audio codec compression' with {codec_name=} requested.")
     if codec_name.startswith("pcm_"):
         logger.debug(f"Audio compression of {codec_name} checked. Is: uncompressed.")
         return AudioCompression.UNCOMPRESSED
@@ -167,15 +173,19 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
     Raises:
         FileNotFoundError: Wenn die Datei nicht gefunden wird
     """
+    logger.trace(f"'Base features from audio files' with file '{file}' requested.")
     file_path = pathlib.Path(file)
 
     if not file_path.is_file():
+        logger.error(f"File not found: {file_path}")
         raise FileNotFoundError(f"File not found: {file_path}")
     
     # initialize return value
+    logger.trace("Load audio files base features...")
     base_features = AudioFileBaseFeatures()
 
     # name and size
+    logger.trace(f"... and set 'base_features.FILENAME' with '{file_path.name}' and 'base_features.SIZE_BYTES' with '{file_path.stat().st_size}'.")
     base_features[base_features.FILENAME]   = file_path.name
     base_features[base_features.SIZE_BYTES] = file_path.stat().st_size
 
@@ -190,15 +200,19 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
             "-of", "json",
             str(file_path)
         ]
+        logger.trace(f"Read meta data from file '{str(file_path)}' by using: '{cmd}'.")
         result = subprocess.run(cmd,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 check=True,
                                 text=True)
         metadata = json.loads(result.stdout)
+        logger.trace(f"Loaded metadata from json imported: '{metadata=}'")
         base_features[base_features.CONTAINER_FORMAT] = \
                                         metadata.get("format", {}).get("format_name", "unknown")
+        
         streams                                       = metadata.get("streams", [])
+
         base_features[base_features.NB_STREAMS]       = len(streams)
         base_features[base_features.HAS_AUDIO_STREAM] = len(streams) > 0
         base_features[base_features.CODEC_PER_STREAM] = list({stream.get("codec_name", "unknown") for stream in streams})
@@ -219,11 +233,13 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
             for chunk in iter(lambda: f.read(8192), b""):
                 hasher.update(chunk)
         base_features[base_features.SH256] = hasher.hexdigest()
+        logger.trace(f"All meta data added to 'base_features': {base_features=}")
 
     except Exception as e:
-        logger.error(f"Fehler beim Extrahieren der Audiodatei-Eigenschaften: {e}")
+        logger.error(f"Error during extraction of meta data information of file {file_path.name}: {e} – Reset metadata to the initial values of class 'AudioFileBaseFeatures'.")
         # so reset to default
         base_features = AudioFileBaseFeatures()
+        logger.trace(f"After error, 'base_features' are initialized with {base_features}.")
 
 # verbesserte Version könnte so aussehen:
 # try:
@@ -304,7 +320,7 @@ def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatur
 #     logger.error(f"Fehler beim Verarbeiten der ffprobe-Ausgabe: {e}")
 #     # Fallback-Werte setzen
 
-    logger.debug(f"Base features of the audio file {file_path.name} read out: {base_features}")
+    logger.debug(f"Base features return value of the audio file {file_path.name} read out are: {base_features}")
     return base_features
 
 def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
@@ -321,7 +337,7 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
     Returns:
         bool: True, wenn die Audiodatei bereits in der Gruppe existiert
     """
-    logger.debug(f"Check if audio file {base_features.FILENAME} is already in the Zarr database of original audio files...")
+    logger.trace(f"Check if audio file {base_features.FILENAME} is already in the Zarr database of original audio files...")
     for group_name in zarr_original_audio_group:
         # we need check this group only the name is only a number
         if group_name.isdigit():
@@ -332,6 +348,7 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
                     # Ok: Now we are shure, that this is a group of an imported audio file
                     # Check if the base_features are the same:
                     bf:AudioFileBaseFeatures = zarr_audio_database_grp.attrs["base_features"]
+                    logger.trace(f"Check group '{group_name}' with original file name '{bf.FILENAME}'...")
                     if (base_features.SH256) == bf["SH256"]:
                         logger.warning(f"Hash of audio file {base_features.FILENAME} found in database.")
                         if sh246_check_only:
@@ -343,6 +360,7 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
                             return True
                         else:
                             logger.warning(f"Audio file {base_features.FILENAME} has differnces in the file name or file size, but the hash is the same. So, it is not recognized as 'already found in database'. But, be carefully with this import! Maybe, the file was only renamed in the meantime between the firt import and now. It is really very, very (!) extremly seldom that the hash has the same value for different files!")
+            logger.trace(f"Check of group {group_name} with original filename '{bf.FILENAME}' done. Is not identical to given audio file.")
     logger.debug(f"Audio file {base_features.FILENAME} finally not recognized as 'already imported'.")
     return False
 
@@ -355,20 +373,24 @@ class FileMeta:
     """
     def __init__(self, file: str|pathlib.Path):
         file = pathlib.Path(file)
-        logger.debug(f"Reading meta information from media file {file.name} requested.")
+        logger.trace(f"Instance of class FileMeta created. Reading meta information from media file {file.name} requested.")
         # from ffprobe
         # ------------
+        logger.trace("Read meta information by using 'ffprobe'...")
         self.meta = {"ffprobe": self._ffprobe_info(file)}
         if len(self.meta["ffprobe"].get("streams", [])) == 0:
             logger.warning(f"No audio streams found by ffprobe in file {file.name}.")
         else:
-            logger.debug(f"Found {len(self.meta["ffprobe"].get("streams", []))} audio streams found by ffprobe in file {file.name}.")
+            logger.debug(f"Found {len(self.meta["ffprobe"].get("streams", []))} audio streams by using ffprobe in file {file.name}.")
         # via mutagen
         # -----------
+        logger.trace("Read meta information by using 'mutagen'...")
         self.meta["mutagen"] = self._mutagen_info(file)
+        logger.trace("Done. (Reading meta information by using 'mutagen')")
 
     @classmethod
     def _ffprobe_info(cls, file: pathlib.Path) -> dict:
+        logger.trace("Reading common infos (format, streams, chapters) of file '{file.name}' requested.")
         cmd = [
             "ffprobe",
             "-v", "error",
@@ -378,6 +400,7 @@ class FileMeta:
             "-show_chapters",
             str(file)
         ]
+        logger.trace(f"Command to read is: {cmd}")
         result = subprocess.run(cmd,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
@@ -390,13 +413,17 @@ class FileMeta:
                                 stream for stream in info["ffprobe"].get("streams", [])
                                 if stream.get("codec_type") == "audio"
                             ]
+        logger.debug(f"Reading common info from file '{str(file)}' finished. Found {len(info["ffprobe"]["streams"])} audio streams.")
         return info
 
     @staticmethod
     def _mutagen_info(file: pathlib.Path) -> dict:
+        logger.trace(f"Reading info from file '{str(file)}' with 'mutagen' requested...")
         audio = MutagenFile(file, easy=False)
         if not audio:
+            logger.error(f"File '{str(file)}' could not read by 'mutagen'.")
             raise ValueError(f"Unsupported or unreadable file for 'mutagen': {file}")
+        logger.trace("Reading done. Sort out technical info and tags...")
         info = {}
         if audio.info:
             info['technical'] = {
@@ -414,6 +441,7 @@ class FileMeta:
                     info['tags'][key] = value.text if hasattr(value, 'text') else str(value)
                 except Exception:
                     info['tags'][key] = str(value)
+        logger.trace("Done. (Sort out technical info and tags)")
         return info
         
     def __str__(self):
@@ -444,10 +472,8 @@ class FileMeta:
             return obj
 
 
-
 def _get_source_params(input_file: pathlib.Path) -> dict:
-    """
-    Ermittelt grundlegende Parameter einer Audiodatei mit ffprobe.
+    """Ermittelt grundlegende Parameter einer Audiodatei mit ffprobe.
     
     Args:
         input_file: Pfad zur Audiodatei
@@ -455,16 +481,19 @@ def _get_source_params(input_file: pathlib.Path) -> dict:
     Returns:
         dict: Dictionary mit den grundlegenden Eigenschaften der Audiodatei
     """
+    logger.trace(f"'_get_source_params' requested for file '{input_file.name}'...")
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a:0",
         "-show_entries", "stream=sample_rate:stream=codec_name:stream=sample_fmt:stream=bit_rate:stream=channels",
         "-of", "json", str(input_file)
     ]
+    logger.trace(f"Command to read params with ffprobe: '{cmd}'.")
     out = subprocess.check_output(args=cmd)
     info = json.loads(out)
     if ('streams' not in info) or (len(info["streams"]) == 0):
         logger.error(f"ffprobe doesn't found any media stream information in file {input_file.name}.")
         raise ValueError(f"ffprobe doesn't found any media stream information in file {input_file.name}.")
+    logger.trace("Reading done. Sort into the dictionary 'source_params'...")
     source_params = {
                 "sampling_rate": int(info['streams'][0]['sample_rate']) if 'sample_rate' in info['streams'][0] else None,
                 "is_opus": info['streams'][0]['codec_name'] == "opus",
@@ -472,8 +501,10 @@ def _get_source_params(input_file: pathlib.Path) -> dict:
                 "bit_rate": int(info['streams'][0]['bit_rate']) if 'bit_rate' in info['streams'][0] else None,
                 "nb_channels": int(info['streams'][0]['channels']) if 'channels' in info['streams'][0] else 1
             }
+    logger.debug(f"Read parameters in 'source_params' are: {source_params}")
     return source_params
 
+Hier geht es weiter mit dem Einsetzen von logger.trace und logger.debug:
 
 def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
     """
