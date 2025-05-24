@@ -31,7 +31,7 @@ from .opusbyteblob import (  # noqa: E402
 from .utils import next_numeric_group_name, remove_zarr_group_recursive  # noqa: E402
 from .config import Config  # noqa: E402
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
-from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
+from .packagetypes import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
 
 STD_TEMP_DIR = "/tmp"
 AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array" 

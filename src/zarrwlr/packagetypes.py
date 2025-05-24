@@ -93,8 +93,10 @@ class LogLevel(str, Enum):
     CRITICAL = "CRITICAL"
     ERROR = "ERROR"
     WARNING = "WARNING"
+    SUCCESS = "SUCCESS" # works with loguru
     INFO = "INFO"
     DEBUG = "DEBUG"
+    TRACE = "TRACE" # works with loguru
     NOTSET = "NOTSET"
 
 

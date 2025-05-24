@@ -11,7 +11,7 @@ import datetime
 
 import zarrwlr
 from zarrwlr.config import Config
-from zarrwlr.types import LogLevel
+from zarrwlr.packagetypes import LogLevel
 from zarrwlr.logsetup import get_module_logger
 
 # Logging konfigurieren - jetzt funktioniert es sofort!
