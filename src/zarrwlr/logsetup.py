@@ -257,7 +257,7 @@ class OptimizedLogger:
             # Add module context to the log record
             extra_context = kwargs.pop('extra', {})
             extra_context['module'] = self.module_name
-            
+
             # Get the actual loguru method and use bind() to set extra context properly
             loguru_method = getattr(loguru_logger.bind(module=self.module_name).opt(depth=1), level_name)
             return loguru_method(message, *args, **kwargs)
@@ -359,6 +359,15 @@ class LoggingManager:
         }
         return level_mapping[log_level]
     
+    @classmethod
+    def _escape_braces_filter(cls, record):
+        """Escaped geschweifte Klammern in Log-Messages um Format-Konflikte zu vermeiden."""
+        message = record.get('message')
+        if isinstance(message, str) and '{' in message:
+            # Escapen um loguru Format-Konflikte zu vermeiden
+            record['message'] = message.replace('{', '{{').replace('}', '}}')
+        return True
+
     @classmethod
     def _create_console_format(cls) -> str:
         """Create format string for console output with colors and symbols"""
@@ -509,17 +518,16 @@ class LoggingManager:
         """
         def console_sink(message):
             """Custom console sink that properly handles newlines."""
-            # Convert loguru's markup to actual terminal output
             import sys
             print(message, end='', file=sys.stdout, flush=True)
         
         handler_id = loguru_logger.add(
-            console_sink,
-            format=cls._console_format_function,
-            level=cls._loguru_level_name(log_level),
-            colorize=True
-            # Removed filter - let all messages through that have the module bound
-        )
+                console_sink,
+                format=cls._console_format_function,
+                level=cls._loguru_level_name(log_level),
+                filter=cls._escape_braces_filter,  # Filter hinzugefügt
+                colorize=True
+            )
         cls._handler_ids["console"] = handler_id
     
     @classmethod
@@ -545,11 +553,11 @@ class LoggingManager:
                 str(log_filepath),
                 format=cls._create_file_format(),
                 level=cls._loguru_level_name(log_level),
+                filter=cls._escape_braces_filter,  # Filter hinzugefügt
                 rotation="10 MB",
-                retention="1 week",  # Keep files for 1 week
+                retention="1 week",
                 compression="zip",
                 encoding="utf-8"
-                # Removed filter - let all messages through that have the module bound
             )
             cls._handler_ids["file"] = handler_id
             
@@ -587,8 +595,8 @@ class LoggingManager:
                 handler_id = loguru_logger.add(
                     tcp_sink,
                     format=cls._create_network_format(),
-                    level=cls._loguru_level_name(log_level)
-                    # Removed filter - let all messages through that have the module bound
+                    level=cls._loguru_level_name(log_level),
+                    filter=cls._escape_braces_filter  # Filter hinzugefügt
                 )
                 
             elif network_config.protocol == 'UDP':
@@ -604,8 +612,8 @@ class LoggingManager:
                 handler_id = loguru_logger.add(
                     udp_sink,
                     format=cls._create_network_format(),
-                    level=cls._loguru_level_name(log_level)
-                    # Removed filter - let all messages through that have the module bound
+                    level=cls._loguru_level_name(log_level),
+                    filter=cls._escape_braces_filter  # Filter hinzugefügt
                 )
             else:
                 raise ValueError(f"Unsupported network protocol: {network_config.protocol}")

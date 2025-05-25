@@ -15,6 +15,7 @@ zarr = "^3.0.7"
 pyyaml = "^6.0.2"
 av = "^14.4.0"
 soundfile = "^0.13.1"
+loguru = "^0.7.3"
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.6.1"
