@@ -140,11 +140,11 @@ class AudioFileBaseFeatures(RestrictedDict):
                 (CONTAINER_FORMAT, str, None),
                 (NB_STREAMS, int, 0),
                 (CODEC_PER_STREAM, list, []),
-                (SAMPLING_RATE_PER_STREAM, list[int], []),
+                (SAMPLING_RATE_PER_STREAM, list, []),
                 (SAMPLE_FORMAT_PER_STREAM_AS_DTYPE, list, []),
-                (SAMPLE_FORMAT_PER_STREAM_IS_PLANAR, list[bool], []),
-                (CHANNELS_PER_STREAM, list[int], []),
-                (CODEC_COMPRESSION_KIND_PER_STREAM, list[AudioCompression], [])
+                (SAMPLE_FORMAT_PER_STREAM_IS_PLANAR, list, []),
+                (CHANNELS_PER_STREAM, list, []),
+                (CODEC_COMPRESSION_KIND_PER_STREAM, list, [])
             ]
 
 AudioSampleFormatMap = {

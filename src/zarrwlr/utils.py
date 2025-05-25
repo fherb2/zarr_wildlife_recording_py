@@ -52,10 +52,16 @@ def make_immutable(obj):
         return obj  # primitive types or immutable objects
 
 def remove_zarr_group_recursive(store, group_path):
+    logger.trace(f"remove_zarr_group_recursive() with {store=} and {group_path=} requested. So, try to remove this group.")
     prefix = group_path.rstrip('/') + '/'
+    logger.trace("Collect keys to delete...")
+Das scheint der falsche Ansatz. Ist zu überarbeiten!
     keys_to_delete = [k for k in store.keys() if k == group_path or k.startswith(prefix)]
+    logger.trace(f"... Keys to delete: {keys_to_delete}")
     for key in keys_to_delete:
+        logger.trace(f"...removing store[{key}]")
         del store[key]
+    logger.trace("Removing done.")
 
 def zarr_to_dict_snapshot(root_group: zarr.Group, k=32, n=32, d=None) -> dict:
     """
@@ -197,5 +203,14 @@ def assert_zarr_snapshot_equals(actual: dict, expected: dict, path=""):
     else:
         if actual != expected:
             raise AssertionError(f"Value mismatch at {path or '<root>'}: {actual!r} != {expected!r}")
+
+def safe_int_conversion(value, default=0):
+    """Safe conversion with default value."""
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 logger.debug("Module loaded.")

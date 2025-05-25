@@ -369,14 +369,130 @@ class LoggingManager:
         return True
 
     @classmethod
-    def _create_console_format(cls) -> str:
-        """Create format string for console output with colors and symbols"""
-        return (
-            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{extra[module]: <15}</cyan> | "
-            "<level>{message}</level>"
-        )
+    def _console_format_function(cls, record):
+        """Custom format function for console output with line wrapping support.
+        
+        Applies the console-specific formatting including colors, proper spacing,
+        and intelligent line wrapping. For TRACE and DEBUG levels, includes line
+        number information after the module name.
+        
+        Parameters
+        ----------
+        record : loguru.Record
+            The log record to format for console display
+            
+        Returns
+        -------
+        str
+            Formatted string ready for console output with colors and wrapping
+        """
+        # Get the wrapped message
+        wrapped_message = cls._wrap_console_message(record)
+        
+        # Determine if we should show line numbers (only for TRACE and DEBUG)
+        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        
+        if show_line_number:
+            # Format with line number after module name
+            module_info = f"{record['extra'].get('module', 'unknown')}:{record.get('line', '?')}"
+            formatted = (
+                f"<green>{record['time']:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+                f"<level>{record['level'].name: <8}</level> | "
+                f"<cyan>{module_info: <20}</cyan> | "  # Erweitert auf 20 Zeichen für Modul:Zeile
+                f"<level>{wrapped_message}</level>\n"
+            )
+        else:
+            # Standard format ohne Zeilennummer
+            formatted = (
+                f"<green>{record['time']:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+                f"<level>{record['level'].name: <8}</level> | "
+                f"<cyan>{record['extra'].get('module', 'unknown'): <15}</cyan> | "
+                f"<level>{wrapped_message}</level>\n"
+            )
+        
+        return formatted
+
+    @classmethod
+    def _file_format_function(cls, record):
+        """Custom format function for file output with conditional line numbers.
+        
+        Generates a clean, parseable format string for file logging that excludes
+        color codes and uses consistent spacing. For TRACE and DEBUG levels, 
+        includes line number information after the module name.
+        
+        Parameters
+        ----------
+        record : loguru.Record
+            The log record to format for file display
+            
+        Returns
+        -------
+        str
+            Formatted string ready for file output
+        """
+        # Determine if we should show line numbers (only for TRACE and DEBUG)
+        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        
+        if show_line_number:
+            # Format with line number after module name
+            module_info = f"{record['extra'].get('module', 'unknown')}:{record.get('line', '?')}"
+            formatted = (
+                f"{record['time']:YYYY-MM-DD HH:mm:ss.SSS} | "
+                f"{record['level'].name: <8} | "
+                f"{module_info: <20} | "  # Erweitert auf 20 Zeichen für Modul:Zeile
+                f"{record['message']}\n"
+            )
+        else:
+            # Standard format ohne Zeilennummer
+            formatted = (
+                f"{record['time']:YYYY-MM-DD HH:mm:ss.SSS} | "
+                f"{record['level'].name: <8} | "
+                f"{record['extra'].get('module', 'unknown'): <15} | "
+                f"{record['message']}\n"
+            )
+        
+        return formatted
+
+    @classmethod
+    def _network_format_function(cls, record):
+        """Custom format function for network transmission with conditional line numbers.
+        
+        Generates a compact, structured format suitable for network transmission
+        to centralized logging systems. For TRACE and DEBUG levels, includes
+        line number information after the module name.
+        
+        Parameters
+        ----------
+        record : loguru.Record
+            The log record to format for network transmission
+            
+        Returns
+        -------
+        str
+            Formatted string optimized for network transmission
+        """
+        # Determine if we should show line numbers (only for TRACE and DEBUG)
+        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        
+        if show_line_number:
+            # Format with line number after module name
+            module_info = f"{record['extra'].get('module', 'unknown')}:{record.get('line', '?')}"
+            formatted = (
+                f"{record['time']:YYYY-MM-DD HH:mm:ss.SSS} | "
+                f"{record['level'].name} | "
+                f"{module_info} | "
+                f"{record['message']}\n"
+            )
+        else:
+            # Standard format ohne Zeilennummer
+            formatted = (
+                f"{record['time']:YYYY-MM-DD HH:mm:ss.SSS} | "
+                f"{record['level'].name} | "
+                f"{record['extra'].get('module', 'unknown')} | "
+                f"{record['message']}\n"
+            )
+        
+        return formatted
     
     @classmethod
     def _wrap_console_message(cls, record) -> str:
@@ -384,7 +500,8 @@ class LoggingManager:
         
         Wraps long log messages for console output while preserving single-line
         format for file and network outputs. Calculates proper indentation to
-        align continuation lines with the message content, not the timestamp.
+        align continuation lines with the message content, adjusting for line numbers
+        when shown for TRACE/DEBUG levels.
         
         Parameters
         ----------
@@ -402,16 +519,30 @@ class LoggingManager:
             # No wrapping, return original message
             return record["message"]
         
-        # Calculate the prefix length (timestamp + level + module + separators)
-        # Example: "2025-05-24 17:17:54.210 | INFO     | example_module1 | "
-        prefix_length = (
-            23 +  # timestamp: "YYYY-MM-DD HH:mm:ss.SSS"
-            3 +   # " | "
-            8 +   # level padded to 8 chars
-            3 +   # " | " 
-            15 +  # module name padded to 15 chars
-            3     # " | "
-        )  # Total: 55 characters
+        # Determine if this record will show line numbers
+        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        
+        if show_line_number:
+            # Calculate prefix length with line number format
+            # "2025-05-24 17:17:54.210 | DEBUG    | example_module1:123  | "
+            prefix_length = (
+                23 +  # timestamp
+                3 +   # " | "
+                8 +   # level padded to 8 chars
+                3 +   # " | " 
+                20 +  # module:line padded to 20 chars
+                3     # " | "
+            )  # Total: 60 characters
+        else:
+            # Standard prefix length without line number
+            prefix_length = (
+                23 +  # timestamp
+                3 +   # " | "
+                8 +   # level padded to 8 chars
+                3 +   # " | " 
+                15 +  # module name padded to 15 chars
+                3     # " | "
+            )  # Total: 55 characters
         
         max_message_length = Config.terminal_log_max_line_length - prefix_length
         
@@ -433,83 +564,12 @@ class LoggingManager:
         return wrapped_lines[0] + "\n" + "\n".join(indent + line for line in wrapped_lines[1:])
     
     @classmethod
-    def _console_format_function(cls, record):
-        """Custom format function for console output with line wrapping support.
-        
-        Applies the console-specific formatting including colors, proper spacing,
-        and intelligent line wrapping. Returns the formatted message with proper
-        newline handling for multi-line wrapped content.
-        
-        Parameters
-        ----------
-        record : loguru.Record
-            The log record to format for console display
-            
-        Returns
-        -------
-        str
-            Formatted string ready for console output with colors and wrapping
-        """
-        # Get the wrapped message
-        wrapped_message = cls._wrap_console_message(record)
-        
-        # Apply the standard format with wrapped message
-        formatted = (
-            f"<green>{record['time']:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-            f"<level>{record['level'].name: <8}</level> | "
-            f"<cyan>{record['extra'].get('module', 'unknown'): <15}</cyan> | "
-            f"<level>{wrapped_message}</level>\n"
-        )
-        
-        return formatted
-    
-    @classmethod
-    def _create_file_format(cls) -> str:
-        """Create format string for file output without colors or special formatting.
-        
-        Generates a clean, parseable format string for file logging that excludes
-        color codes and uses consistent spacing. This format is designed to be
-        easily parsed by log analysis tools and maintains single-line entries.
-        
-        Returns
-        -------
-        str
-            Format string suitable for file output
-        """
-        return (
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-            "{level: <8} | "
-            "{extra[module]: <15} | "
-            "{message}"
-        )
-    
-    @classmethod
-    def _create_network_format(cls) -> str:
-        """Create format string for network transmission to remote log collectors.
-        
-        Generates a compact, structured format suitable for network transmission
-        to centralized logging systems. Excludes colors and minimizes bandwidth
-        usage while maintaining essential log information.
-        
-        Returns
-        -------
-        str
-            Format string optimized for network transmission
-        """
-        return (
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-            "{level} | "
-            "{extra[module]} | "
-            "{message}"
-        )
-    
-    @classmethod
     def _setup_console_handler(cls, log_level: LogLevel):
         """Configure and register the console output handler.
         
         Sets up loguru handler for console output with colored formatting,
         custom line wrapping, and appropriate log level filtering. Uses
-        a custom sink function to properly handle newlines in wrapped messages.
+        a custom format function to properly handle conditional line numbers.
         
         Parameters
         ----------
@@ -523,9 +583,9 @@ class LoggingManager:
         
         handler_id = loguru_logger.add(
                 console_sink,
-                format=cls._console_format_function,
+                format=cls._console_format_function,  # Verwende die custom format function
                 level=cls._loguru_level_name(log_level),
-                filter=cls._escape_braces_filter,  # Filter hinzugefügt
+                filter=cls._escape_braces_filter,
                 colorize=True
             )
         cls._handler_ids["console"] = handler_id
@@ -535,8 +595,8 @@ class LoggingManager:
         """Configure and register the file output handler with rotation and compression.
         
         Sets up loguru handler for file output with automatic rotation, retention
-        policies, and compression. Creates necessary directories and handles
-        permission errors gracefully with fallback error reporting.
+        policies, and compression. Uses custom format function for conditional
+        line numbers on TRACE/DEBUG levels.
         
         Parameters
         ----------
@@ -551,9 +611,9 @@ class LoggingManager:
             
             handler_id = loguru_logger.add(
                 str(log_filepath),
-                format=cls._create_file_format(),
+                format=cls._file_format_function,  # Verwende die custom format function
                 level=cls._loguru_level_name(log_level),
-                filter=cls._escape_braces_filter,  # Filter hinzugefügt
+                filter=cls._escape_braces_filter,
                 rotation="10 MB",
                 retention="1 week",
                 compression="zip",
@@ -569,8 +629,8 @@ class LoggingManager:
         """Configure and register network output handler for remote log collection.
         
         Sets up loguru handler for network output supporting both TCP and UDP
-        protocols. Implements connection timeouts and graceful error handling
-        with fallback to stderr for network failures.
+        protocols. Uses custom format function for conditional line numbers
+        on TRACE/DEBUG levels.
         
         Parameters
         ----------
@@ -594,9 +654,9 @@ class LoggingManager:
                 
                 handler_id = loguru_logger.add(
                     tcp_sink,
-                    format=cls._create_network_format(),
+                    format=cls._network_format_function,  # Verwende die custom format function
                     level=cls._loguru_level_name(log_level),
-                    filter=cls._escape_braces_filter  # Filter hinzugefügt
+                    filter=cls._escape_braces_filter
                 )
                 
             elif network_config.protocol == 'UDP':
@@ -611,9 +671,9 @@ class LoggingManager:
                 
                 handler_id = loguru_logger.add(
                     udp_sink,
-                    format=cls._create_network_format(),
+                    format=cls._network_format_function,  # Verwende die custom format function
                     level=cls._loguru_level_name(log_level),
-                    filter=cls._escape_braces_filter  # Filter hinzugefügt
+                    filter=cls._escape_braces_filter
                 )
             else:
                 raise ValueError(f"Unsupported network protocol: {network_config.protocol}")
