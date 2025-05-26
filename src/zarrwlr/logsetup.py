@@ -87,11 +87,12 @@ comprehensive documentation with parameters, return values, and usage examples.
 import pathlib
 import sys
 import socket
+from enum import Enum
 import textwrap
 from typing import Dict, Optional, Any, Callable
 from loguru import logger as loguru_logger
-from .packagetypes import LogLevel
 from .config import NetworkLogConfig
+from .packagetypes import LogLevel
 
 
 class OptimizedLogger:
@@ -328,6 +329,7 @@ class LoggingManager:
     _handler_ids: Dict[str, int] = {}  # Track loguru handler IDs
     _current_config: Dict[str, Any] = {}
     _initialized = False
+    _levels_with_line_number = ['TRACE', 'DEBUG', 'ERROR', 'CRITICAL']
     
     @classmethod
     def _loguru_level_name(cls, log_level: LogLevel) -> str:
@@ -390,7 +392,7 @@ class LoggingManager:
         wrapped_message = cls._wrap_console_message(record)
         
         # Determine if we should show line numbers (only for TRACE and DEBUG)
-        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        show_line_number = record['level'].name in cls._levels_with_line_number
         
         if show_line_number:
             # Format with line number after module name
@@ -431,7 +433,7 @@ class LoggingManager:
             Formatted string ready for file output
         """
         # Determine if we should show line numbers (only for TRACE and DEBUG)
-        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        show_line_number = record['level'].name in cls._levels_with_line_number
         
         if show_line_number:
             # Format with line number after module name
@@ -472,7 +474,7 @@ class LoggingManager:
             Formatted string optimized for network transmission
         """
         # Determine if we should show line numbers (only for TRACE and DEBUG)
-        show_line_number = record['level'].name in ['TRACE', 'DEBUG']
+        show_line_number = record['level'].name in cls._levels_with_line_number
         
         if show_line_number:
             # Format with line number after module name

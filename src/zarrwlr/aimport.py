@@ -491,11 +491,11 @@ class FileMeta:
         try:
             audio = MutagenFile(str(file), easy=False)
         except Exception as err:
-            logger.error(f"File {file.name} could not be processed by Mutagen successfully! No meta data from this method. MutagenFile() function from the mutagen modul rasies following error: '{err}'.")
+            logger.error(f"File {file.name} could not be processed by Mutagen successfully! No meta data from this method. MutagenFile() function from the mutagen modul rasies following exception: '{err}'.")
             return {}
         logger.trace("Reading done.")
         if not audio:
-            logger.error(f"File '{str(file)}' could not read by 'mutagen'. So, no meta data from this method.")
+            logger.error(f"File '{str(file)}' could not read by 'mutagen'. No meta data from this method.")
             return {}
         logger.trace("Sort out technical info and tags...")
         info = {}

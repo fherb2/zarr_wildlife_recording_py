@@ -6,6 +6,16 @@ from enum import Enum, auto
 from collections.abc import MutableMapping
 import numpy as np
 
+class LogLevel(str, Enum):
+    CRITICAL = "CRITICAL"
+    ERROR = "ERROR"
+    WARNING = "WARNING"
+    SUCCESS = "SUCCESS"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
+    TRACE = "TRACE"
+    NOTSET = "NOTSET"
+
 class RestrictedDict(MutableMapping):
     """Base class for dictionaries with fixed and restricted keys.
     
@@ -88,19 +98,31 @@ class RestrictedDict(MutableMapping):
     def from_dict(cls, data: dict):
         return cls(**data)
 
+class JSONEnumMeta(type(Enum)):
+    """Metaclass die automatisch JSON-Serialisierung zu Enums hinzufügt."""
+    
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        
+        # Automatisch JSON-Methoden hinzufügen falls nicht vorhanden
+        if not hasattr(cls, '__json__'):
+            cls.__json__ = lambda self: self.value
+        
+        if not hasattr(cls, 'to_json'):
+            cls.to_json = lambda self: self.value
+        
+        if not hasattr(cls, 'from_json'):
+            @classmethod
+            def from_json(cls, value):
+                try:
+                    return cls(value)
+                except ValueError:
+                    raise ValueError(f"'{value}' is not a valid {cls.__name__}")
+            cls.from_json = from_json
+        
+        return cls
 
-class LogLevel(str, Enum):
-    CRITICAL = "CRITICAL"
-    ERROR = "ERROR"
-    WARNING = "WARNING"
-    SUCCESS = "SUCCESS" # works with loguru
-    INFO = "INFO"
-    DEBUG = "DEBUG"
-    TRACE = "TRACE" # works with loguru
-    NOTSET = "NOTSET"
-
-
-class AudioCompression(Enum):
+class AudioCompression(Enum, metaclass=JSONEnumMeta):
     """Shows the principle kind of compression (lossy, lossless, uncompressed)."""
     def _generate_next_value_(name, start, count, last_values):
         # is used by 'auto()'
@@ -113,7 +135,6 @@ class AudioCompression(Enum):
 
     def __str__(self):
         return self.value
-
 
 class AudioFileBaseFeatures(RestrictedDict):
     """Basic information about an audio file."""

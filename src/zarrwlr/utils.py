@@ -55,7 +55,7 @@ def remove_zarr_group_recursive(store, group_path):
     logger.trace(f"remove_zarr_group_recursive() with {store=} and {group_path=} requested. So, try to remove this group.")
     prefix = group_path.rstrip('/') + '/'
     logger.trace("Collect keys to delete...")
-Das scheint der falsche Ansatz. Ist zu überarbeiten!
+#Das scheint der falsche Ansatz. Ist zu überarbeiten!
     keys_to_delete = [k for k in store.keys() if k == group_path or k.startswith(prefix)]
     logger.trace(f"... Keys to delete: {keys_to_delete}")
     for key in keys_to_delete:
@@ -212,5 +212,6 @@ def safe_int_conversion(value, default=0):
         return int(value)
     except (ValueError, TypeError):
         return default
+
 
 logger.debug("Module loaded.")
