@@ -3,7 +3,7 @@
     //       This differs from the JSON standard. The standard doesn't know any comments sadly.
 
     // The name of the container created by VSCode with this configuration:
-    "name": "devcontainer_ubuntu24_py311", // You should change the name, if you change the following image.
+    "name": "zarrwlr_devcontainer_ubuntu24_py311", // You should change the name, if you change the following image.
     // The image to create the container:
 
     "image": "registry.hzdr.de/fwf/libraries/dockerfiles/devcontainers-python-cuda-imageprocessing/zarrwlr_dev_ub22_py311:rel-1.0.0-2183f2",
