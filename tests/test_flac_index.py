@@ -114,65 +114,60 @@ def test_import_wav_to_flac_with_new_index():
             flac_compression_level=4
         )
         
-        # Prüfen, ob die Gruppe erstellt wurde
-        if "0" not in audio_group:
-            print("FEHLER: Gruppe '0' wurde nicht erstellt.")
+        # FIXED: Finde die tatsächlich erstellte Gruppe dynamisch
+        group_names = [name for name in audio_group.keys() if name.isdigit()]
+        if not group_names:
+            print("FEHLER: Keine Audio-Gruppe erstellt.")
             logger.trace("test_import_wav_to_flac_with_new_index() finished.")
             return False
         
-        group_0 = audio_group["0"]
+        # Nimm die Gruppe mit der höchsten Nummer (neueste)
+        latest_group_name = max(group_names, key=int)
+        latest_group = audio_group[latest_group_name]
         
         # Prüfen, ob audio_data_blob_array existiert
-        if "audio_data_blob_array" not in group_0:
+        if "audio_data_blob_array" not in latest_group:
             print("FEHLER: audio_data_blob_array wurde nicht erstellt.")
             logger.trace("test_import_wav_to_flac_with_new_index() finished.")
             return False
         
-        audio_blob_array = group_0["audio_data_blob_array"]
+        audio_blob_array = latest_group["audio_data_blob_array"]
         
-        print(f"WAV zu FLAC Import erfolgreich: Gruppe '0' erstellt")
+        print(f"WAV zu FLAC Import erfolgreich: Gruppe '{latest_group_name}' erstellt")
         print(f"Blob-Array-Größe: {audio_blob_array.shape[0]} Bytes")
         print(f"Codec in Blob-Array: {audio_blob_array.attrs.get('codec')}")
         print(f"Sample-Rate: {audio_blob_array.attrs.get('sample_rate')} Hz")
         print(f"Kanäle: {audio_blob_array.attrs.get('nb_channels')}")
         
-        # Jetzt den neuen FLAC-Index testen
-        print("\n--- Teste neues FLAC-Index-Modul ---")
+        # FIXED: Index wurde bereits durch import_original_audio_file() erstellt
+        print("\n--- Prüfe automatisch erstellten FLAC-Index ---")
         
-        # Index mit neuem Modul erstellen
-        logger.info("Erstelle FLAC-Index mit neuem Modul...")
-        try:
-            flac_index = flacbyteblob.build_flac_index(
-                zarr_group=group_0,
-                audio_blob_array=audio_blob_array
-            )
-            
-            print(f"✓ FLAC-Index erfolgreich erstellt!")
-            print(f"Index-Einträge: {len(flac_index)}")
-            print(f"Index-Felder: {list(flac_index.dtype.names)}")
-            print(f"Index-Codec: {flac_index.attrs.get('codec')}")
-            print(f"Index-Sample-Rate: {flac_index.attrs.get('sample_rate')} Hz")
-            print(f"Index-Kanäle: {flac_index.attrs.get('channels')}")
-            
-            # Validiere Index-Struktur
-            if not _validate_flac_index_structure(flac_index, audio_blob_array):
-                logger.trace("test_import_wav_to_flac_with_new_index() finished.")
-                return False
-            
-            # Teste Audio-Segment-Extraktion mit neuem Modul
-            if not _test_new_flac_segment_extraction(group_0, audio_blob_array):
-                logger.trace("test_import_wav_to_flac_with_new_index() finished.")
-                return False
-            
-            logger.trace("test_import_wav_to_flac_with_new_index() finished.")
-            return True
-            
-        except Exception as e:
-            print(f"FEHLER beim Index-Erstellen: {str(e)}")
-            import traceback
-            traceback.print_exc()
+        if 'flac_index' not in latest_group:
+            print("FEHLER: FLAC-Index wurde nicht automatisch erstellt")
             logger.trace("test_import_wav_to_flac_with_new_index() finished.")
             return False
+        
+        flac_index = latest_group['flac_index']
+        print(f"✓ FLAC-Index wurde automatisch erstellt!")
+        print(f"Index-Einträge: {len(flac_index)}")
+        print(f"Index-Shape: {flac_index.shape}")
+        print(f"Index-Dtype: {flac_index.dtype}")
+        print(f"Index-Codec: {flac_index.attrs.get('codec')}")
+        print(f"Index-Sample-Rate: {flac_index.attrs.get('sample_rate')} Hz")
+        print(f"Index-Kanäle: {flac_index.attrs.get('channels')}")
+        
+        # Validiere Index-Struktur
+        if not _validate_flac_index_structure_2d(flac_index, audio_blob_array):
+            logger.trace("test_import_wav_to_flac_with_new_index() finished.")
+            return False
+        
+        # Teste Audio-Segment-Extraktion mit neuem Modul
+        if not _test_new_flac_segment_extraction(latest_group, audio_blob_array):
+            logger.trace("test_import_wav_to_flac_with_new_index() finished.")
+            return False
+        
+        logger.trace("test_import_wav_to_flac_with_new_index() finished.")
+        return True
         
     except Exception as e:
         print(f"FEHLER beim Import: {str(e)}")
@@ -212,25 +207,34 @@ def test_existing_flac_file_with_new_index():
             flac_compression_level=6
         )
         
-        group_0 = audio_group["0"]
-        audio_blob_array = group_0["audio_data_blob_array"]
+        # FIXED: Finde die tatsächlich erstellte Gruppe dynamisch
+        group_names = [name for name in audio_group.keys() if name.isdigit()]
+        if not group_names:
+            print("FEHLER: Keine Audio-Gruppe erstellt.")
+            logger.trace("test_existing_flac_file_with_new_index() finished.")
+            return False
         
-        print(f"FLAC Import erfolgreich")
+        latest_group_name = max(group_names, key=int)
+        latest_group = audio_group[latest_group_name]
+        audio_blob_array = latest_group["audio_data_blob_array"]
+        
+        print(f"FLAC Import erfolgreich in Gruppe '{latest_group_name}'")
         print(f"Blob-Array-Größe: {audio_blob_array.shape[0]} Bytes")
         
-        # Test neuen Index
-        print("\n--- Teste neues FLAC-Index-Modul mit direkter FLAC-Datei ---")
+        # FIXED: Index wurde bereits durch import_original_audio_file() erstellt - nicht nochmal erstellen
+        print("\n--- Prüfe automatisch erstellten FLAC-Index ---")
         
-        flac_index = flacbyteblob.build_flac_index(
-            zarr_group=group_0,
-            audio_blob_array=audio_blob_array
-        )
+        if 'flac_index' not in latest_group:
+            print("FEHLER: FLAC-Index wurde nicht automatisch erstellt")
+            logger.trace("test_existing_flac_file_with_new_index() finished.")
+            return False
         
-        print(f"✓ FLAC-Index für direkte FLAC-Datei erstellt!")
+        flac_index = latest_group['flac_index']
+        print(f"✓ FLAC-Index für direkte FLAC-Datei wurde automatisch erstellt!")
         print(f"Index-Einträge: {len(flac_index)}")
         
         # Teste Segment-Extraktion
-        if not _test_new_flac_segment_extraction(group_0, audio_blob_array):
+        if not _test_new_flac_segment_extraction(latest_group, audio_blob_array):
             logger.trace("test_existing_flac_file_with_new_index() finished.")
             return False
         
@@ -244,9 +248,9 @@ def test_existing_flac_file_with_new_index():
         logger.trace("test_existing_flac_file_with_new_index() finished.")
         return False
 
-def _validate_flac_index_structure(flac_index, audio_blob_array):
-    """Validiert die Struktur des FLAC-Index"""
-    print("\n--- Validiere Index-Struktur ---")
+def _validate_flac_index_structure_2d(flac_index, audio_blob_array):
+    """Validiert die Struktur des 2D FLAC-Index"""
+    print("\n--- Validiere Index-Struktur (2D Array) ---")
     
     try:
         # Index-Array-Struktur prüfen
@@ -254,11 +258,9 @@ def _validate_flac_index_structure(flac_index, audio_blob_array):
             print("FEHLER: Index ist kein Zarr-Array")
             return False
         
-        # Erwartete Felder im structured array
-        expected_fields = ['byte_offset', 'frame_size', 'sample_pos']
-        actual_fields = list(flac_index.dtype.names)
-        if actual_fields != expected_fields:
-            print(f"FEHLER: Index-Felder: erwartet {expected_fields}, gefunden {actual_fields}")
+        # Erwartete 2D-Array-Struktur
+        if len(flac_index.shape) != 2 or flac_index.shape[1] != 3:
+            print(f"FEHLER: Index-Shape: erwartet (n, 3), gefunden {flac_index.shape}")
             return False
         
         # Index sollte mindestens einen Frame haben
@@ -281,21 +283,21 @@ def _validate_flac_index_structure(flac_index, audio_blob_array):
             print("FEHLER: total_frames stimmt nicht mit Index-Länge überein")
             return False
         
-        # Frame-Positionen sollten monoton steigend sein
+        # Frame-Positionen sollten monoton steigend sein (Spalte 2)
         if len(flac_index) > 1:
-            sample_positions = flac_index['sample_pos']
+            sample_positions = flac_index[:, 2]  # Spalte 2 = sample_pos
             if not np.all(sample_positions[1:] >= sample_positions[:-1]):
                 print("FEHLER: Sample-Positionen sind nicht monoton steigend")
                 return False
             
-            # Byte-Offsets sollten monoton steigend sein
-            byte_offsets = flac_index['byte_offset']
+            # Byte-Offsets sollten monoton steigend sein (Spalte 0)
+            byte_offsets = flac_index[:, 0]  # Spalte 0 = byte_offset
             if not np.all(byte_offsets[1:] > byte_offsets[:-1]):
                 print("FEHLER: Byte-Offsets sind nicht monoton steigend")
                 return False
         
-        # Frame-Größen sollten plausibel sein
-        frame_sizes = flac_index['frame_size']
+        # Frame-Größen sollten plausibel sein (Spalte 1)
+        frame_sizes = flac_index[:, 1]  # Spalte 1 = frame_size
         if not np.all(frame_sizes > 0):
             print("FEHLER: Ungültige Frame-Größen gefunden")
             return False
@@ -424,3 +426,4 @@ if __name__ == "__main__":
     
     print("\nFertig!")
     logger.success("__main__ finalised.")
+    
