@@ -10,12 +10,16 @@ import yaml
 import tempfile
 from mutagen import File as MutagenFile
 import zarr
+import zarrcompatibility as zc
+from .utils import file_size
 
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
 logger.trace("Module loading...")
 
+# Enable universal serialization
+zc.enable_universal_serialization()
 
 # Import the functions from flacbyteblob and opusbyteblob
 from .flacbyteblob import (  # noqa: E402
@@ -724,16 +728,16 @@ def import_original_audio_file(
 
         # 6) Create array, decode/encode file and import byte blob
         #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
-        logger.trace(f"Try to create the Zarr array in order to save the byte-blob in it later. Configer it with name={AUDIO_DATA_BLOB_ARRAY_NAME}, shape=(0,) since we resize later, chunks={Config.original_audio_chunk_size}, shards={Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size} and dtype=np.uint8 .")
-        audio_blob_array = new_original_audio_grp.create_array(
-                                    name            = AUDIO_DATA_BLOB_ARRAY_NAME,
-                                    shape           = (0,), # we append data step by step
-                                    chunks          = (Config.original_audio_chunk_size,),
-                                    shards          = (Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size,),
-                                    dtype           = np.uint8,
-                                    overwrite       = True,
-                                )
-        logger.trace("Array created.")
+        # logger.trace(f"Try to create the Zarr array in order to save the byte-blob in it later. Configer it with name={AUDIO_DATA_BLOB_ARRAY_NAME}, shape=(0,) since we resize later, chunks={Config.original_audio_chunk_size}, shards={Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size} and dtype=np.uint8 .")
+        # audio_blob_array = new_original_audio_grp.create_array(
+        #                             name            = AUDIO_DATA_BLOB_ARRAY_NAME,
+        #                             shape           = (0,), # we append data step by step
+        #                             chunks          = (Config.original_audio_chunk_size,),
+        #                             shards          = (Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size,),
+        #                             dtype           = np.uint8,
+        #                             overwrite       = True,
+        #                         )
+        # logger.trace("Array created.")
 
         # create temp file but hold it not open; we use its name following
         logger.trace(f"Try to create a temporary file in '{temp_dir}'...")
@@ -777,18 +781,40 @@ def import_original_audio_file(
             ffmpeg_cmd = ["ffmpeg", "-y"]
             ffmpeg_cmd += ["-i", str(audio_file), "-c:a", "flac"]
             ffmpeg_cmd += ["-compression_level", str(flac_compression_level)]
-            ffmpeg_cmd += [str(tmp_file)]
+            ffmpeg_cmd += ["-f", 'flac', str(tmp_file)]
             logger.trace(f"Pepared ffmpeg command: {ffmpeg_cmd}")
         # start encoding into temp file and wait until finished
         logger.trace("Tray to run ffmpeg...")
         subprocess.run(ffmpeg_cmd, check=True)
         logger.trace("ffmpeg ready.")
 
+        size = file_size(tmp_file)
+
+        logger.trace(f"Try to create the Zarr array in order to save the byte-blob in it later. Configer it with name={AUDIO_DATA_BLOB_ARRAY_NAME}, shape=(0,) since we resize later, chunks={Config.original_audio_chunk_size}, shards={Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size} and dtype=np.uint8 .")
+        audio_blob_array = new_original_audio_grp.create_array(
+                                    name            = AUDIO_DATA_BLOB_ARRAY_NAME,
+                                    compressor      = None,
+                                    shape           = (size,), # we append data step by step
+                                    chunks          = (Config.original_audio_chunk_size,),
+                                    shards          = (Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size,),
+                                    dtype           = np.uint8,
+                                    overwrite       = True,
+                                )
+        logger.trace("Array created.")
+
+
         # copy tmp-file data into the array and remove the temp file
         logger.trace("Try to import encoded data from temporary file into the Zarr array...")
+        # with open(tmp_file, "rb") as f:
+        #     for buffer in iter(lambda: f.read(chunk_size), b''):
+        #         audio_blob_array.append(np.frombuffer(buffer, dtype="u1"))
+        offset = 0
+        max_buffer_size = int(np.clip(Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size, 1, 100e6))
         with open(tmp_file, "rb") as f:
-            for buffer in iter(lambda: f.read(chunk_size), b''):
-                audio_blob_array.append(np.frombuffer(buffer, dtype="u1"))
+            for buffer in iter(lambda: f.read(max_buffer_size), b''):
+                buffer_array = np.frombuffer(buffer, dtype="u1")
+                audio_blob_array[offset:offset + len(buffer_array)] = buffer_array
+                offset += len(buffer_array)
         tmp_file.unlink()
         logger.trace("Done and temporary file removed.")
 

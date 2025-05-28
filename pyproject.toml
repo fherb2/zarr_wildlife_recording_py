@@ -16,6 +16,7 @@ pyyaml = "^6.0.2"
 av = "^14.4.0"
 soundfile = "^0.13.1"
 loguru = "^0.7.3"
+zarrcompatibility = {url = "https://github.com/fherb2/zarrcompatibility/releases/download/v1.0.3/zarrcompatibility-1.0.3-py3-none-any.whl"}
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.6.1"
