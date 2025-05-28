@@ -149,7 +149,7 @@ def test_import_wav_to_flac_with_new_index():
         
         flac_index = latest_group['flac_index']
         print(f"✓ FLAC-Index wurde automatisch erstellt!")
-        print(f"Index-Einträge: {len(flac_index)}")
+        print(f"Index-Einträge: {flac_index.shape[0]}")
         print(f"Index-Shape: {flac_index.shape}")
         print(f"Index-Dtype: {flac_index.dtype}")
         print(f"Index-Codec: {flac_index.attrs.get('codec')}")
@@ -231,7 +231,7 @@ def test_existing_flac_file_with_new_index():
         
         flac_index = latest_group['flac_index']
         print(f"✓ FLAC-Index für direkte FLAC-Datei wurde automatisch erstellt!")
-        print(f"Index-Einträge: {len(flac_index)}")
+        print(f"Index-Einträge: {flac_index.shape[0]}")
         
         # Teste Segment-Extraktion
         if not _test_new_flac_segment_extraction(latest_group, audio_blob_array):
@@ -264,7 +264,7 @@ def _validate_flac_index_structure_2d(flac_index, audio_blob_array):
             return False
         
         # Index sollte mindestens einen Frame haben
-        if len(flac_index) == 0:
+        if flac_index.shape[0] == 0:
             print("WARNUNG: Index ist leer - keine Frames gefunden")
             return True  # Nicht als Fehler werten - könnte bei sehr kurzen Dateien passieren
         
@@ -279,12 +279,12 @@ def _validate_flac_index_structure_2d(flac_index, audio_blob_array):
             print(f"FEHLER: Falscher Codec im Index: {flac_index.attrs['codec']}")
             return False
         
-        if flac_index.attrs['total_frames'] != len(flac_index):
+        if flac_index.attrs['total_frames'] != flac_index.shape[0]:
             print("FEHLER: total_frames stimmt nicht mit Index-Länge überein")
             return False
         
         # Frame-Positionen sollten monoton steigend sein (Spalte 2)
-        if len(flac_index) > 1:
+        if flac_index.shape[0] > 1:
             sample_positions = flac_index[:, 2]  # Spalte 2 = sample_pos
             if not np.all(sample_positions[1:] >= sample_positions[:-1]):
                 print("FEHLER: Sample-Positionen sind nicht monoton steigend")
@@ -426,4 +426,3 @@ if __name__ == "__main__":
     
     print("\nFertig!")
     logger.success("__main__ finalised.")
-    

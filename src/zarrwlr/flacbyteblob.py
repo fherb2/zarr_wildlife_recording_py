@@ -315,7 +315,7 @@ def _find_frame_range_for_samples(flac_index: zarr.Array, start_sample: int, end
     start_idx = max(0, start_idx)
     
     end_idx = np.searchsorted(sample_positions, end_sample, side='right')
-    end_idx = min(end_idx, len(flac_index) - 1)
+    end_idx = min(end_idx, flac_index.shape[0] - 1)
     
     return start_idx, end_idx
 
@@ -378,7 +378,7 @@ def extract_audio_segment_flac(zarr_group: zarr.Group, audio_blob_array: zarr.Ar
                 sf_file.seek(first_frame_sample)
                 
                 # Calculate samples to read
-                if end_idx < len(flac_index) - 1:
+                if end_idx < flac_index.shape[0] - 1:
                     last_frame_end = sample_positions[end_idx + 1]
                 else:
                     last_frame_end = sf_file.frames
