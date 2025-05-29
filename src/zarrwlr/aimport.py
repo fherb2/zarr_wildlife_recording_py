@@ -835,7 +835,7 @@ def import_original_audio_file(
             attrs["compression_level"] = flac_compression_level
         audio_blob_array.attrs.update(attrs)
         logger.trace("Done.")
-        
+          
         # 7) Create and save index inside the group (as array, not attribute since the size of structured data)
         # Build index for the appropriate codec - this is the key change from the original code
         if target_codec == 'opus':

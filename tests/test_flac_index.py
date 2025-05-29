@@ -89,22 +89,22 @@ def test_import_wav_to_flac_with_new_index():
     logger.trace("test_import_wav_to_flac_with_new_index() requested.")
     print("\n=== Test: WAV zu FLAC Import mit neuem Index-Modul ===")
     
-    # Zarr-Datenbank vorbereiten
-    audio_group = prepare_zarr_database()
-    
-    # WAV-Datei finden
-    test_files = get_test_files()
-    wav_file = next((f for f in test_files if f.name.endswith(".wav")), None)
-    
-    if not wav_file or not wav_file.exists():
-        print(f"FEHLER: WAV-Testdatei nicht gefunden.")
-        logger.trace("test_import_wav_to_flac_with_new_index() finished.")
-        return False
-    
-    print(f"Importiere WAV-Datei: {wav_file}")
-    
-    # Import durchführen (wie im ursprünglichen Test)
-    try:
+    try:  # Neuer try-except Block für besseres Debugging
+        # Zarr-Datenbank vorbereiten
+        audio_group = prepare_zarr_database()
+        
+        # WAV-Datei finden
+        test_files = get_test_files()
+        wav_file = next((f for f in test_files if f.name.endswith(".wav")), None)
+        
+        if not wav_file or not wav_file.exists():
+            print(f"FEHLER: WAV-Testdatei nicht gefunden.")
+            logger.trace("test_import_wav_to_flac_with_new_index() finished.")
+            return False
+        
+        print(f"Importiere WAV-Datei: {wav_file}")
+        
+        # Import durchführen (wie im ursprünglichen Test)
         timestamp = datetime.datetime.now()
         import_original_audio_file(
             audio_file=wav_file,
@@ -170,7 +170,7 @@ def test_import_wav_to_flac_with_new_index():
         return True
         
     except Exception as e:
-        print(f"FEHLER beim Import: {str(e)}")
+        print(f"DETAILLIERTER FEHLER beim WAV-Test: {str(e)}")
         import traceback
         traceback.print_exc()
         logger.trace("test_import_wav_to_flac_with_new_index() finished.")
@@ -302,12 +302,14 @@ def _validate_flac_index_structure_2d(flac_index, audio_blob_array):
             print("FEHLER: Ungültige Frame-Größen gefunden")
             return False
         
-        if not np.all(frame_sizes < len(audio_blob_array)):
+        # FIXED: Use .shape[0] instead of len() for Zarr v3 compatibility
+        if not np.all(frame_sizes < audio_blob_array.shape[0]):
             print("FEHLER: Frame-Größen größer als Audio-Blob")
             return False
         
         print("✓ Index-Struktur-Validierung erfolgreich")
-        print(f"  Frames: {len(flac_index)}")
+        # FIXED: Use .shape[0] instead of len() for Zarr v3 compatibility
+        print(f"  Frames: {flac_index.shape[0]}")
         print(f"  Sample-Rate: {flac_index.attrs['sample_rate']} Hz")
         print(f"  Kanäle: {flac_index.attrs['channels']}")
         
