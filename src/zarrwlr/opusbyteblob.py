@@ -42,7 +42,6 @@ def build_opus_index(zarr_group, audio_blob_array):
         shape=(0, 2),
         chunks=(max_entries_per_chunk, 2),
         dtype=np.uint64,
-        maxshape=(None, 2),
         overwrite=True
     )
 
