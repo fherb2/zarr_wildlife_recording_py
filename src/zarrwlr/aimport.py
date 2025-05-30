@@ -19,18 +19,20 @@ logger.trace("Module loading...")
 # Enable universal serialization
 zc.enable_universal_serialization()
 
-# Import FLAC functions from new flac_access module
+# Import FLAC functions from flac_access module
 from .flac_access import (  # noqa: E402
     import_flac_to_zarr,
     extract_audio_segment_flac, 
     parallel_extract_audio_segments_flac
 )
-# Import Opus functions (unchanged)
-from .opusbyteblob import (  # noqa: E402
-    build_opus_index, 
+
+# Import Opus functions from opus_access module (NEW - Step 1.3)
+from .opus_access import (  # noqa: E402
+    import_opus_to_zarr,
     extract_audio_segment_opus, 
     parallel_extract_audio_segments_opus
 )
+
 from .utils import next_numeric_group_name, remove_zarr_group_recursive, safe_int_conversion  # noqa: E402
 from .config import Config  # noqa: E402
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
@@ -556,14 +558,12 @@ def import_original_audio_file(
     """
     Importiert eine Audiodatei in die Original-Audio-Gruppe und erstellt Index.
     
-    Arbeitsablauf:
-    1. Analysiere Datei-/Audio-/Codec-Typ
-    2. Überprüfe, ob die Datei bereits in der Datenbank vorhanden ist
-    3. Erfasse alle Metadaten der Datei
-    4. Berechne die nächste freie Gruppen-Nummer
-    5. Erstelle die Gruppe, dekodiere die Datei und importiere sie je nach Quell- und Zielcodec
-    6. Erstelle den Index und füge ihn als Array hinzu
-    7. Füge alle Metadaten als Attribute hinzu
+    SIMPLIFIED VERSION (Step 1.3): 
+    Codec-specific logic has been moved to dedicated modules:
+    - FLAC: flac_access.import_flac_to_zarr()
+    - Opus: opus_access.import_opus_to_zarr()
+    
+    This function now serves as a clean orchestrator.
     
     Args:
         audio_file: Pfad zur Audiodatei
@@ -646,100 +646,11 @@ def import_original_audio_file(
         new_original_audio_grp.attrs["meta_data_structure"]     = all_file_meta
         logger.trace("Done.")
 
-        # 6) Create array, decode/encode file and import byte blob
-        #    Use the right import strategy (to opus, to flac, byte-copy, transform sample-rate...)
-        logger.trace("Start importing depending on source and target codecs...")
+        # 6) SIMPLIFIED ORCHESTRATOR (Step 1.3): Use dedicated codec modules
+        logger.trace(f"Starting import using {target_codec} module...")
         
-        if target_codec == 'opus':
-            # Handle Opus import (using existing opus functions)
-            logger.trace("Target codec is 'opus'. Prepare parameters...")
-            opus_bitrate_str = str(int(opus_bitrate/1000))+'k'
-            sampling_rescale_factor = 1.0
-            target_sample_rate = source_params["sampling_rate"]
-            is_ultrasonic = (target_codec == "opus") and (source_params["sampling_rate"] > 48000)
-            
-            # create temp file but hold it not open; we use its name following
-            logger.trace(f"Try to create a temporary file in '{temp_dir}'...")
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.tmp', dir=temp_dir) as tmp_out:
-                tmp_file = pathlib.Path(tmp_out.name)
-            logger.trace(f"Created with name '{tmp_file.name}'.")
-
-            if target_codec == 'opus' and source_params["is_opus"] and not is_ultrasonic:
-                # copy opus encoded data directly into ogg.opus 
-                logger.trace("Target is 'opus', source is 'opus' and it is not 'ultrasonic', since the sampling rate is not higher than 48kS/s.")
-                ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(audio_file),
-                                "-c:a", "copy",
-                                "-f", "ogg", str(tmp_file)
-                                ]
-                logger.trace(f"Prepared ffmpeg command: {ffmpeg_cmd}")
-            else:
-                logger.trace("Target is 'opus' codec. Prepare the ffmpeg command now...")
-                ffmpeg_cmd = ["ffmpeg", "-y"]
-                if is_ultrasonic:
-                    logger.trace("File is marked as 'ultrasonic' since sampling rate is higher than 48kS/s.")
-                    # we interpret sampling rate as "48000" to can use opus for ultrasonic
-                    ffmpeg_cmd += ["-sample_rate", "48000"]
-                    target_sample_rate = 48000
-                    sampling_rescale_factor = float(source_params["sampling_rate"]) / 48000.0
-                ffmpeg_cmd += ["-i", str(audio_file)]
-                ffmpeg_cmd += ["-c:a", "libopus", "-b:a", opus_bitrate_str]
-                ffmpeg_cmd += ["-vbr", "off"] # constant bitrate is a bit better in quality than VBR=On
-                ffmpeg_cmd += ["-apply_phase_inv", "false"] # Phasenrichtige Kodierung: keine Tricks!
-                ffmpeg_cmd += ["-f", "ogg", str(tmp_file)]
-                logger.trace(f"Prepared ffmpeg command: {ffmpeg_cmd}")
-            
-            # start encoding into temp file and wait until finished
-            logger.trace("Try to run ffmpeg...")
-            subprocess.run(ffmpeg_cmd, check=True)
-            logger.trace("ffmpeg ready.")
-
-            size = file_size(tmp_file)
-
-            logger.trace(f"Try to create the Zarr array in order to save the byte-blob in it later. Configure it with name={AUDIO_DATA_BLOB_ARRAY_NAME}, shape=({size},), chunks={Config.original_audio_chunk_size}, shards={Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size} and dtype=np.uint8 .")
-            audio_blob_array = new_original_audio_grp.create_array(
-                                        name            = AUDIO_DATA_BLOB_ARRAY_NAME,
-                                        compressor      = None,
-                                        shape           = (size,),
-                                        chunks          = (Config.original_audio_chunk_size,),
-                                        shards          = (Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size,),
-                                        dtype           = np.uint8,
-                                        overwrite       = True,
-                                    )
-            logger.trace("Array created.")
-
-            # copy tmp-file data into the array and remove the temp file
-            logger.trace("Try to import encoded data from temporary file into the Zarr array...")
-            offset = 0
-            max_buffer_size = int(np.clip(Config.original_audio_chunks_per_shard * Config.original_audio_chunk_size, 1, 100e6))
-            with open(tmp_file, "rb") as f:
-                for buffer in iter(lambda: f.read(max_buffer_size), b''):
-                    buffer_array = np.frombuffer(buffer, dtype="u1")
-                    audio_blob_array[offset:offset + len(buffer_array)] = buffer_array
-                    offset += len(buffer_array)
-            tmp_file.unlink()
-            logger.trace("Done and temporary file removed.")
-
-            # add encoding attributes to this array
-            logger.trace("Try to add some meta information as attributes to this Zarr array...")
-            attrs = {
-                    "codec": target_codec,
-                    "nb_channels": source_params["nb_channels"],
-                    "sample_rate": target_sample_rate,
-                    "sampling_rescale_factor": sampling_rescale_factor,
-                    "container_type": "ogg",
-                    "first_sample_time_stamp": first_sample_time_stamp,
-                    "opus_bitrate": opus_bitrate
-                    }
-            audio_blob_array.attrs.update(attrs)
-            logger.trace("Done.")
-            
-            # Create Opus index
-            logger.trace("Start to build index by using 'opus' codec...")
-            build_opus_index(new_original_audio_grp, audio_blob_array)
-            logger.trace("Done.")
-            
-        else:  # target_codec == 'flac'
-            # Use new FLAC import function from flac_access module
+        if target_codec == 'flac':
+            # Use FLAC access module
             logger.trace("Target codec is 'flac'. Using flac_access module for import...")
             audio_blob_array = import_flac_to_zarr(
                 zarr_group=new_original_audio_grp,
@@ -750,6 +661,22 @@ def import_original_audio_file(
                 temp_dir=temp_dir
             )
             logger.trace("FLAC import completed via flac_access module.")
+            
+        elif target_codec == 'opus':
+            # Use Opus access module (NEW - Step 1.3)
+            logger.trace("Target codec is 'opus'. Using opus_access module for import...")
+            audio_blob_array = import_opus_to_zarr(
+                zarr_group=new_original_audio_grp,
+                audio_file=audio_file,
+                source_params=source_params,
+                first_sample_time_stamp=first_sample_time_stamp,
+                opus_bitrate=opus_bitrate,
+                temp_dir=temp_dir
+            )
+            logger.trace("Opus import completed via opus_access module.")
+            
+        else:
+            raise ValueError(f"Unsupported target codec: {target_codec}")
 
     except Exception as err:
         logger.error(f"An error happens during importing audio file. Error: {err}")
@@ -759,12 +686,16 @@ def import_original_audio_file(
             remove_zarr_group_recursive(zarr_original_audio_group.store, new_original_audio_grp.path)
             logger.trace("Removing done.")
         raise  # raise original exception
+    
     logger.success(f"Audio data from file '{audio_file.name}' completely imported into Zarr group '{new_audio_group_name}' in '{str(zarr_original_audio_group.store_path)}'. Index for 'random access read' created.")
 
 
 def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
     """
     Extrahiert ein Audiosegment aus einer Zarr-Gruppe, unabhängig vom verwendeten Codec.
+    
+    SIMPLIFIED VERSION (Step 1.3): 
+    Uses dedicated codec modules for extraction.
     
     Args:
         zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
@@ -793,6 +724,9 @@ def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
 def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_workers=4):
     """
     Extrahiert mehrere Audiosegmente parallel aus einer Zarr-Gruppe.
+    
+    SIMPLIFIED VERSION (Step 1.3): 
+    Uses dedicated codec modules for parallel extraction.
     
     Args:
         zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index

@@ -42,6 +42,14 @@ from .flac_access import (
     build_flac_index
 )
 
+# Opus-spezifische Funktionen (für erweiterte Nutzung)
+from .opus_access import (
+    import_opus_to_zarr,
+    extract_audio_segment_opus,
+    parallel_extract_audio_segments_opus,
+    build_opus_index
+)
+
 # Utilities 
 from .utils import (
     file_size,
