@@ -1,6 +1,6 @@
 """
-FLAC Index Backend Module - Parallelized Version
-================================================
+FLAC Index Backend Module - Parallelized Version (Circular Import behoben)
+==========================================================================
 
 High-performance FLAC frame parsing and index creation with 3-phase parallelization.
 
@@ -34,11 +34,11 @@ Phase 3: Sequential Sample-Position Accumulation (✅ PRODUCTION-READY)
 - Only arithmetic → very fast (~1-2 seconds)
 - Output: Final FLAC index ready for Zarr
 
-MEMORY EFFICIENCY REVOLUTION:
-============================
-- Problem: ProcessPoolExecutor copies complete audio data to each worker
-- Solution: Zarr-reference system with on-demand loading
-- Result: 200MB audio × 4 workers = only ~50MB RAM (vs 1200MB naive approach)
+CIRCULAR IMPORT FIX:
+===================
+❌ REMOVED: import zarrwlr.aimport (caused circular dependency)
+✅ KEPT: All core FLAC processing functionality
+✅ MOVED: Test-related imports to test files where they belong
 """
 
 import zarr
@@ -49,8 +49,8 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import List, Tuple, Optional
 import hashlib
 
-# import and initialize logging
-from .logsetup import get_module_logger
+# import and initialize logging (absolute import für Test-Umgebung)
+from zarrwlr.logsetup import get_module_logger
 logger = get_module_logger(__file__)
 logger.trace("FLAC Index Backend module loading (parallelized version)...")
 
@@ -689,15 +689,18 @@ def build_flac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array,
     
     logger.trace(f"Creating FLAC index for: {sample_rate}Hz, {channels} channels, container: {container_type}")
     
-    if use_parallel and hasattr(zarr_group, 'store') and hasattr(zarr_group.store, 'path'):
+    # Initialize frames_info to avoid UnboundLocalError
+    frames_info = []
+    
+    if use_parallel:
         # Use 3-phase parallel processing
-        logger.trace("Using 3-phase parallel FLAC index creation")
+        logger.trace("Attempting 3-phase parallel FLAC index creation")
         
         try:
-            # Determine Zarr paths for parallel access
-            zarr_store_path = str(zarr_group.store.path)
-            group_path = zarr_group.path
-            array_name = audio_blob_array.name
+            # Determine Zarr paths for parallel access using robust method
+            zarr_store_path, group_path, array_name = _get_zarr_array_path_components(zarr_group, audio_blob_array)
+            
+            logger.trace(f"Parallel processing paths: store={zarr_store_path}, group={group_path}, array={array_name}")
             
             total_start_time = time.time()
             
@@ -791,6 +794,80 @@ def build_flac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array,
     processing_method = "parallel (3-phase)" if use_parallel else "sequential (fallback)"
     logger.success(f"FLAC index created with {len(frames_info)} frames using {processing_method}")
     return flac_index
+
+
+def _get_zarr_store_path(zarr_group: zarr.Group) -> str:
+    """
+    Robust extraction of Zarr store path for different Zarr versions
+    
+    Args:
+        zarr_group: Zarr group
+        
+    Returns:
+        String path to the store
+        
+    Raises:
+        ValueError: If store path cannot be determined
+    """
+    try:
+        store = zarr_group.store
+        
+        # Method 1: Direct path attribute (Zarr v3)
+        if hasattr(store, 'path'):
+            return str(store.path)
+        
+        # Method 2: dir_path method (some Zarr versions)
+        if hasattr(store, 'dir_path'):
+            return str(store.dir_path())
+        
+        # Method 3: root attribute (LocalStore)
+        if hasattr(store, 'root'):
+            return str(store.root)
+        
+        # Method 4: Parse from string representation
+        store_str = str(store)
+        if 'file://' in store_str:
+            # Extract path from "LocalStore('file:///path/to/store')"
+            import re
+            match = re.search(r'file://([^\']+)', store_str)
+            if match:
+                return match.group(1)
+        
+        # Method 5: Check for map attribute (MemoryStore compatibility)
+        if hasattr(store, 'map') and hasattr(store.map, 'root'):
+            return str(store.map.root)
+        
+        raise ValueError(f"Cannot determine store path from {type(store)}: {store_str}")
+        
+    except Exception as e:
+        raise ValueError(f"Failed to extract store path: {e}")
+
+
+def _get_zarr_array_path_components(zarr_group: zarr.Group, array: zarr.Array) -> Tuple[str, str, str]:
+    """
+    Get path components for Zarr array access in parallel workers
+    
+    Args:
+        zarr_group: Zarr group containing the array
+        array: Zarr array
+        
+    Returns:
+        Tuple of (store_path, group_path, array_name)
+    """
+    store_path = _get_zarr_store_path(zarr_group)
+    group_path = zarr_group.path if zarr_group.path else ""
+    
+    # Extract just the array name (not the full path)
+    if hasattr(array, 'name'):
+        array_name = array.name
+        # If name contains path separators, take only the last part
+        if '/' in array_name:
+            array_name = array_name.split('/')[-1]
+    else:
+        # Fallback: try to get name from array's path or basename
+        array_name = "audio_data_blob_array"  # Default fallback
+    
+    return store_path, group_path, array_name
 
 
 def _find_frame_range_for_samples(flac_index: zarr.Array, start_sample: int, end_sample: int) -> Tuple[int, int]:

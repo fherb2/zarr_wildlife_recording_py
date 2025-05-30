@@ -169,7 +169,7 @@ class Config:
                          ]
     
     log_level: LogLevel = LogLevel.TRACE    # Global logging level (acts as upper bound)
-    log_filepath: pathlib.Path|None = None  # set a logging path if you want to write logging outputs
+    log_filepath: pathlib.Path|None = "zarrwlr_test.log" #None  # set a logging path if you want to write logging outputs
                                             # eg. pathlibPath("./mylogfile.log")
     network_log_config: NetworkLogConfig|None = None  # Network logging configuration
     module_log_levels: Dict[str, LogLevel] = {}  # Module-specific log levels
