@@ -176,6 +176,9 @@ class Config:
     terminal_log_max_line_length: int|None = 120  # Maximum line length for terminal output (None = no wrapping)
     original_audio_chunk_size: int       = int(2**20) # 1 MByte (don't use small chunks: too slowly!)
     original_audio_chunks_per_shard: int = int(50*2**20 / original_audio_chunk_size) # 50 MByte is a good value for access for both: local resources and network
+
+    # Neue Parameter bei Umbau des Imports:
+    opus_batch_chunk_size_mb: int = 16  # Conservative default for mixed workloads
     
     # immutable keys  (can not be changed during runtime; only changeable at this position)
     # --------------  

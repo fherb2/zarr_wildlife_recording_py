@@ -673,6 +673,8 @@ class OpusEndToEndTester:
                 'error': str(e),
                 'pipeline_stages': self.pipeline_stages
             }
+        
+
 
 def main():
     parser = argparse.ArgumentParser(description='Opus End-to-End Integration Test')
