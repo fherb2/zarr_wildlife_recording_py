@@ -26,12 +26,36 @@ from .flac_access import (  # noqa: E402
     parallel_extract_audio_segments_flac
 )
 
-# Import Opus functions from opus_access module (NEW - Step 1.3)
-from .opus_access import (  # noqa: E402
-    import_opus_to_zarr,
-    extract_audio_segment_opus, 
-    parallel_extract_audio_segments_opus
-)
+# Opus functions - LAZY IMPORT to avoid circular imports
+import_opus_to_zarr = None
+extract_audio_segment_opus = None  
+parallel_extract_audio_segments_opus = None
+
+def _get_opus_functions():
+    """Lazy import of opus functions to avoid circular imports"""
+    global import_opus_to_zarr, extract_audio_segment_opus, parallel_extract_audio_segments_opus
+    
+    if import_opus_to_zarr is None:
+        try:
+            from .opus_access import (
+                import_opus_to_zarr as import_func,
+                extract_audio_segment_opus as extract_func, 
+                parallel_extract_audio_segments_opus as parallel_func
+            )
+            import_opus_to_zarr = import_func
+            extract_audio_segment_opus = extract_func
+            parallel_extract_audio_segments_opus = parallel_func
+            
+            logger.trace("Opus functions loaded successfully via lazy import")
+            
+        except ImportError as e:
+            logger.error(f"Could not import opus functions: {e}")
+            # Set dummy functions to avoid None errors
+            import_opus_to_zarr = lambda *args, **kwargs: None
+            extract_audio_segment_opus = lambda *args, **kwargs: None
+            parallel_extract_audio_segments_opus = lambda *args, **kwargs: None
+    
+    return import_opus_to_zarr, extract_audio_segment_opus, parallel_extract_audio_segments_opus
 
 from .utils import next_numeric_group_name, remove_zarr_group_recursive, safe_int_conversion  # noqa: E402
 from .config import Config  # noqa: E402
@@ -663,9 +687,16 @@ def import_original_audio_file(
             logger.trace("FLAC import completed via flac_access module.")
             
         elif target_codec == 'opus':
-            # Use Opus access module (NEW - Step 1.3)
+            # Use Opus access module (NEW - Step 1.3) - LAZY IMPORT
             logger.trace("Target codec is 'opus'. Using opus_access module for import...")
-            audio_blob_array = import_opus_to_zarr(
+            
+            # Get opus functions via lazy import
+            opus_import_func, _, _ = _get_opus_functions()
+            
+            if opus_import_func is None:
+                raise RuntimeError("Opus functions not available - check opus_access module")
+            
+            audio_blob_array = opus_import_func(
                 zarr_group=new_original_audio_grp,
                 audio_file=audio_file,
                 source_params=source_params,
@@ -695,7 +726,7 @@ def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
     Extrahiert ein Audiosegment aus einer Zarr-Gruppe, unabhängig vom verwendeten Codec.
     
     SIMPLIFIED VERSION (Step 1.3): 
-    Uses dedicated codec modules for extraction.
+    Uses dedicated codec modules for extraction with format auto-detection.
     
     Args:
         zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
@@ -709,14 +740,42 @@ def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
     Raises:
         ValueError: Wenn der Codec nicht unterstützt wird
     """
-    # Codec aus den Attributen holen
-    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-    codec = audio_blob_array.attrs.get('codec', 'unknown')
+    # Auto-detect format and codec
+    has_packet_format = (
+        "opus_packets_blob" in zarr_group and
+        "opus_packet_index" in zarr_group
+    )
+    
+    has_legacy_format = AUDIO_DATA_BLOB_ARRAY_NAME in zarr_group
+    
+    if has_packet_format:
+        # NEW: Packet-based format - get codec from packet index
+        packet_index = zarr_group["opus_packet_index"]
+        codec = packet_index.attrs.get('codec', 'opus')  # Assume opus for packet format
+        audio_blob_array = None  # Not needed for packet-based
+        
+    elif has_legacy_format:
+        # Legacy format - get codec from audio blob
+        audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
+        codec = audio_blob_array.attrs.get('codec', 'unknown')
+        
+    else:
+        raise ValueError("No supported audio format found in zarr_group")
     
     if codec == 'flac':
+        if audio_blob_array is None:
+            raise ValueError("FLAC requires legacy audio_data_blob_array format")
         return extract_audio_segment_flac(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
+        
     elif codec == 'opus':
-        return extract_audio_segment_opus(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
+        # Lazy import of opus extraction function
+        _, opus_extract_func, _ = _get_opus_functions()
+        
+        if opus_extract_func is None:
+            raise RuntimeError("Opus extraction function not available")
+            
+        return opus_extract_func(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
+        
     else:
         raise ValueError(f"Nicht unterstützter Codec: {codec}")
 
@@ -726,7 +785,7 @@ def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_wo
     Extrahiert mehrere Audiosegmente parallel aus einer Zarr-Gruppe.
     
     SIMPLIFIED VERSION (Step 1.3): 
-    Uses dedicated codec modules for parallel extraction.
+    Uses dedicated codec modules for parallel extraction with format auto-detection.
     
     Args:
         zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
@@ -737,14 +796,42 @@ def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_wo
     Returns:
         Liste von np.ndarray: Extrahierte Audiosegmente
     """
-    # Codec aus den Attributen holen
-    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-    codec = audio_blob_array.attrs.get('codec', 'unknown')
+    # Auto-detect format and codec (same logic as single extraction)
+    has_packet_format = (
+        "opus_packets_blob" in zarr_group and
+        "opus_packet_index" in zarr_group
+    )
+    
+    has_legacy_format = AUDIO_DATA_BLOB_ARRAY_NAME in zarr_group
+    
+    if has_packet_format:
+        # NEW: Packet-based format
+        packet_index = zarr_group["opus_packet_index"]
+        codec = packet_index.attrs.get('codec', 'opus')
+        audio_blob_array = None  # Not needed for packet-based
+        
+    elif has_legacy_format:
+        # Legacy format
+        audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
+        codec = audio_blob_array.attrs.get('codec', 'unknown')
+        
+    else:
+        raise ValueError("No supported audio format found in zarr_group")
     
     if codec == 'flac':
+        if audio_blob_array is None:
+            raise ValueError("FLAC requires legacy audio_data_blob_array format")
         return parallel_extract_audio_segments_flac(zarr_group, audio_blob_array, segments, dtype, max_workers)
+        
     elif codec == 'opus':
-        return parallel_extract_audio_segments_opus(zarr_group, audio_blob_array, segments, dtype, max_workers)
+        # Lazy import of opus parallel extraction function
+        _, _, opus_parallel_func = _get_opus_functions()
+        
+        if opus_parallel_func is None:
+            raise RuntimeError("Opus parallel extraction function not available")
+            
+        return opus_parallel_func(zarr_group, audio_blob_array, segments, dtype, max_workers)
+        
     else:
         raise ValueError(f"Nicht unterstützter Codec: {codec}")
     

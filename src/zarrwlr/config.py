@@ -174,8 +174,11 @@ class Config:
     network_log_config: NetworkLogConfig|None = None  # Network logging configuration
     module_log_levels: Dict[str, LogLevel] = {}  # Module-specific log levels
     terminal_log_max_line_length: int|None = 120  # Maximum line length for terminal output (None = no wrapping)
-    original_audio_chunk_size: int       = int(2**20) # 1 MByte (don't use small chunks: too slowly!)
-    original_audio_chunks_per_shard: int = int(50*2**20 / original_audio_chunk_size) # 50 MByte is a good value for access for both: local resources and network
+ #   original_audio_chunk_size: int       = int(2**20) # 1 MByte (don't use small chunks: too slowly!)
+ #   original_audio_chunks_per_shard: int = int(50*2**20 / original_audio_chunk_size) # 50 MByte is a good value for access for both: local resources and network
+
+    original_audio_chunk_size = 1024 * 1024  # 1MB
+    original_audio_chunks_per_shard = 4      # 4 chunks per shard
 
     # Neue Parameter bei Umbau des Imports:
     opus_batch_chunk_size_mb: int = 16  # Conservative default for mixed workloads
