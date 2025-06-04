@@ -1,2 +1,0 @@
--e ./src # install this project as "editable"
-#sunpy
