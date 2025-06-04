@@ -168,7 +168,7 @@ class Config:
                             "original_audio_chunks_per_shard",
                          ]
     
-    log_level: LogLevel = LogLevel.TRACE    # Global logging level (acts as upper bound)
+    log_level: LogLevel = LogLevel.ERROR    # Global logging level (acts as upper bound)
     log_filepath: pathlib.Path|None = "zarrwlr_test.log" #None  # set a logging path if you want to write logging outputs
                                             # eg. pathlibPath("./mylogfile.log")
     network_log_config: NetworkLogConfig|None = None  # Network logging configuration

@@ -7,6 +7,7 @@ KEY IMPROVEMENTS:
 - opuslib for direct decoding (no ffmpeg for extraction)
 - Sample-accurate random access
 - Eliminates ffmpeg startup overhead for small segments
+- OGG to Raw Opus extraction for OpusParser compatibility
 
 Essential Functions for aimport.py compatibility:
 - import_opus_to_zarr()
@@ -24,8 +25,8 @@ import time
 import struct
 from typing import List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor
-import struct 
-from typing import Dict, Optional 
+
+from .opus_parser import OpusParser, OpusPacketInfo, OpusStreamInfo
 
 # Import backend module - LAZY IMPORT to avoid circular imports
 opus_index = None
@@ -56,6 +57,91 @@ OGG_PAGE_HEADER_SIZE = 27
 OGG_SYNC_PATTERN = b'OggS'
 OPUS_HEAD_MAGIC = b'OpusHead'
 OPUS_TAGS_MAGIC = b'OpusTags'
+
+
+def _extract_raw_opus_from_ogg(ogg_data: bytes) -> bytes:
+    """
+    Extract Raw Opus stream from OGG container for OpusParser compatibility
+    
+    Args:
+        ogg_data: OGG container data from ffmpeg
+        
+    Returns:
+        Raw Opus stream (OpusHead + OpusTags + Audio packets)
+        
+    Raises:
+        ValueError: If no valid Opus stream found in OGG
+    """
+    logger.trace(f"Extracting Raw Opus from OGG container ({len(ogg_data)} bytes)")
+    
+    pos = 0
+    opus_packets = []
+    opus_header = None
+    opus_tags = None
+    
+    while pos < len(ogg_data) - 27:  # OGG page header is 27 bytes
+        # Find OGG page
+        if ogg_data[pos:pos+4] != OGG_SYNC_PATTERN:
+            pos += 1
+            continue
+        
+        # Parse OGG page header
+        if pos + 27 > len(ogg_data):
+            break
+            
+        try:
+            header = struct.unpack('<4sBBQIIIB', ogg_data[pos:pos+27])
+            segment_count = header[7]
+        except struct.error:
+            pos += 1
+            continue
+        
+        # Read segment table
+        seg_table_start = pos + 27
+        if seg_table_start + segment_count > len(ogg_data):
+            break
+            
+        segment_table = ogg_data[seg_table_start:seg_table_start + segment_count]
+        
+        # Extract packets from this page
+        packet_start = seg_table_start + segment_count
+        for segment_size in segment_table:
+            if packet_start + segment_size > len(ogg_data):
+                break
+                
+            packet = ogg_data[packet_start:packet_start + segment_size]
+            
+            # Check packet type
+            if packet.startswith(OPUS_HEAD_MAGIC):
+                opus_header = packet
+                logger.trace(f"Found OpusHead: {len(packet)} bytes")
+            elif packet.startswith(OPUS_TAGS_MAGIC):
+                opus_tags = packet
+                logger.trace(f"Found OpusTags: {len(packet)} bytes")
+            elif len(packet) > 0:
+                # Audio packet
+                opus_packets.append(packet)
+                
+            packet_start += segment_size
+        
+        # Next page
+        total_page_size = 27 + segment_count + sum(segment_table)
+        pos += total_page_size
+    
+    logger.trace(f"Extracted {len(opus_packets)} audio packets from OGG")
+    
+    if opus_header and opus_packets:
+        # Create proper Raw Opus stream: OpusHead + OpusTags + Audio packets
+        raw_opus_stream = opus_header
+        if opus_tags:
+            raw_opus_stream += opus_tags
+        raw_opus_stream += b''.join(opus_packets)
+        
+        logger.trace(f"Created Raw Opus stream: {len(raw_opus_stream)} bytes")
+        return raw_opus_stream
+    else:
+        raise ValueError(f"Could not extract valid Raw Opus from OGG container "
+                        f"(header: {opus_header is not None}, packets: {len(opus_packets)})")
 
 
 class OpusPacketExtractor:
@@ -534,13 +620,15 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
                        opus_bitrate: int = 160000,
                        temp_dir: str = "/tmp") -> zarr.Array:
     """
-    FIXED: Dynamic timeout calculation + optimized ffmpeg parameters
+    FIXED: Dynamic timeout calculation + optimized ffmpeg parameters + OGG to Raw Opus extraction
     
     Timeout Strategy:
     - Base timeout: 60 seconds
     - Dynamic scaling: +10 seconds per 100MB
     - Opus sources: Faster (copy mode)
     - Transcoding: Slower (requires encoding)
+    
+    NEW: OGG to Raw Opus extraction for OpusParser compatibility
     """
     import time
     start_time = time.time()
@@ -597,8 +685,8 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
     print(f"⏱️ DEBUG: Timeout calculation - Mode: {processing_mode}, File: {file_size_mb:.1f}MB")
     print(f"⏱️ DEBUG: Dynamic timeout: {dynamic_timeout:.0f}s ({dynamic_timeout/60:.1f}min)")
     
-    # Create temporary raw Opus file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.opus', dir=temp_dir) as tmp_out:
+    # Create temporary OGG Opus file (ffmpeg always creates OGG)
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', dir=temp_dir) as tmp_out:
         tmp_file = pathlib.Path(tmp_out.name)
     
     print(f"📝 DEBUG: Temporary file created: {tmp_file}")
@@ -606,7 +694,7 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
     try:
         print(f"⚙️ DEBUG: Starting ffmpeg conversion at {time.time() - start_time:.3f}s")
         
-        # OPTIMIZED FFMPEG COMMAND (based on search results)
+        # OPTIMIZED FFMPEG COMMAND (creates OGG container)
         ffmpeg_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "info"]
         ffmpeg_cmd += ["-i", str(audio_file)]
         
@@ -642,8 +730,8 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
             else:
                 print(f"🔄 DEBUG: Transcoding {source_params.get('codec_name', 'unknown')} source to Opus")
         
-        # Output format: RAW OPUS (no container)
-        ffmpeg_cmd += ["-f", "opus", str(tmp_file)]
+        # Output format: OGG OPUS (ffmpeg always creates OGG container)
+        ffmpeg_cmd += ["-f", "ogg", str(tmp_file)]
         
         print(f"🎬 DEBUG: ffmpeg command: {' '.join(ffmpeg_cmd)}")
         
@@ -768,8 +856,8 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
             print(f"❌ DEBUG: ffmpeg subprocess failed: {e}")
             raise RuntimeError(f"ffmpeg conversion failed: {e}")
         
-        # Read and validate raw Opus data
-        print(f"📖 DEBUG: Reading raw Opus data at {time.time() - start_time:.3f}s")
+        # Read and validate OGG Opus data
+        print(f"📖 DEBUG: Reading OGG Opus data at {time.time() - start_time:.3f}s")
         
         if not tmp_file.exists():
             print("❌ DEBUG: Temporary file does not exist!")
@@ -783,56 +871,71 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
             raise RuntimeError("ffmpeg created empty output file")
         
         with open(tmp_file, "rb") as f:
-            raw_opus_data = f.read()
+            ogg_opus_data = f.read()
         
-        print(f"💾 DEBUG: Raw Opus data loaded: {len(raw_opus_data)} bytes at {time.time() - start_time:.3f}s")
+        print(f"💾 DEBUG: OGG Opus data loaded: {len(ogg_opus_data)} bytes at {time.time() - start_time:.3f}s")
         
-        # Validate Opus data
-        if len(raw_opus_data) < 100:
-            print(f"⚠️ DEBUG: Suspiciously small Opus output: {len(raw_opus_data)} bytes")
-            raise ValueError("ffmpeg produced unusually small Opus output")
+        # Validate OGG Opus data
+        if len(ogg_opus_data) < 100:
+            print(f"⚠️ DEBUG: Suspiciously small OGG output: {len(ogg_opus_data)} bytes")
+            raise ValueError("ffmpeg produced unusually small OGG output")
         
-        if b'OpusHead' not in raw_opus_data[:2000]:
+        if not ogg_opus_data.startswith(b'OggS'):
+            print("❌ DEBUG: Output is not valid OGG container!")
+            raise ValueError("ffmpeg did not produce valid OGG container")
+        
+        if b'OpusHead' not in ogg_opus_data[:2000]:
             print("⚠️ DEBUG: OpusHead not found in first 2000 bytes")
-            if b'OpusHead' not in raw_opus_data:
+            if b'OpusHead' not in ogg_opus_data:
                 print("❌ DEBUG: No OpusHead found anywhere in data!")
                 raise ValueError("No valid Opus data found - ffmpeg may have failed silently")
             else:
-                opus_head_pos = raw_opus_data.find(b'OpusHead')
+                opus_head_pos = ogg_opus_data.find(b'OpusHead')
                 print(f"🎯 DEBUG: OpusHead found at position {opus_head_pos}")
         else:
             print("✅ DEBUG: OpusHead found in first 2000 bytes")
         
-        print(f"🔍 DEBUG: Starting packet parsing at {time.time() - start_time:.3f}s")
+        print(f"🔄 DEBUG: Converting OGG to Raw Opus at {time.time() - start_time:.3f}s")
         
-        # PARSE RAW OPUS (with timeout protection)
+        # CRITICAL NEW STEP: Convert OGG to Raw Opus for OpusParser
         try:
-            print("🏗️ DEBUG: Creating RawOpusParser...")
-            parser = RawOpusParser(raw_opus_data)
-            print("🏗️ DEBUG: RawOpusParser created, calling extract_packets()...")
+            raw_opus_data = _extract_raw_opus_from_ogg(ogg_opus_data)
+            print(f"✅ DEBUG: OGG to Raw Opus conversion successful: {len(raw_opus_data)} bytes")
             
-            # Reasonable timeout for packet extraction
-            import signal
-            def timeout_handler(signum, frame):
-                raise TimeoutError("Packet extraction timed out")
+            # Validate Raw Opus
+            if not raw_opus_data.startswith(b'OpusHead'):
+                raise ValueError("Raw Opus extraction failed - does not start with OpusHead")
             
-            # Use smaller timeout for packet parsing (should be fast)
-            parsing_timeout = min(120, dynamic_timeout // 4)  # Max 2min for parsing
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(parsing_timeout)
+        except Exception as e:
+            print(f"❌ DEBUG: OGG to Raw Opus conversion failed: {e}")
+            raise RuntimeError(f"Failed to extract Raw Opus from OGG: {e}")
+        
+        print(f"🔍 DEBUG: Starting OpusParser packet parsing at {time.time() - start_time:.3f}s")
+        
+        # PARSE RAW OPUS with OpusParser
+        try:
+            print("🏗️ DEBUG: Creating OpusParser...")
+            parser = OpusParser(raw_opus_data)
+            print("🏗️ DEBUG: OpusParser created, calling extract_packets_with_positions()...")
             
-            try:
-                packets, opus_header, total_samples = parser.extract_packets()
-                signal.alarm(0)  # Cancel timeout
-                print(f"✅ DEBUG: extract_packets() completed at {time.time() - start_time:.3f}s")
-            except TimeoutError:
-                print(f"⏰ DEBUG: Packet extraction TIMEOUT after {parsing_timeout}s!")
-                signal.alarm(0)
-                raise RuntimeError(f"Packet extraction timed out after {parsing_timeout}s - possible infinite loop in RawOpusParser")
+            # Enhanced API call
+            packet_infos = parser.extract_packets_with_positions()
+            print(f"✅ DEBUG: OpusParser extraction completed at {time.time() - start_time:.3f}s")
             
-            print(f"📦 DEBUG: Packets extracted: {len(packets) if packets else 0}")
-            print(f"📋 DEBUG: Opus header: {'Found' if opus_header else 'Missing'}")
-            print(f"🎵 DEBUG: Total samples: {total_samples}")
+            # Extract data for existing logic (backwards compatibility)
+            packets = [info.data for info in packet_infos]
+            stream_info = parser.get_stream_info()
+            opus_header = stream_info.opus_header if stream_info else b''
+            total_samples = packet_infos[-1].cumulative_samples if packet_infos else 0
+            
+            print(f"📦 DEBUG: OpusParser results:")
+            print(f"   Packets extracted: {len(packets)}")
+            print(f"   Opus header: {'Found' if opus_header else 'Missing'} ({len(opus_header)} bytes)")
+            print(f"   Total samples: {total_samples}")
+            if stream_info:
+                print(f"   Stream info: {stream_info.channel_count}ch, "
+                      f"original: {stream_info.original_sample_rate}Hz, "
+                      f"pre_skip: {stream_info.pre_skip}")
             
             if not packets:
                 print("❌ DEBUG: No packets extracted!")
@@ -842,7 +945,7 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
                 print("❌ DEBUG: No OpusHead header found!")
                 raise ValueError("No OpusHead header found in raw stream")
             
-            # Basic packet count validation
+            # Enhanced packet count validation
             if len(packets) > 100000:
                 print(f"⚠️ DEBUG: Very large packet count: {len(packets)} - possible parsing issue")
                 logger.warning(f"Large number of packets extracted: {len(packets)} for {file_size_mb:.1f}MB file")
@@ -850,18 +953,27 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
                 print(f"⚠️ DEBUG: Small packet count: {len(packets)} - very short audio?")
             else:
                 print(f"✅ DEBUG: Reasonable packet count: {len(packets)} for {file_size_mb:.1f}MB file")
+                
+                # Additional validation with OpusParser
+                if packet_infos:
+                    avg_samples_per_packet = total_samples / len(packets)
+                    print(f"📊 DEBUG: Average samples per packet: {avg_samples_per_packet:.1f}")
+                    
+                    # Check for reasonable sample counts
+                    if avg_samples_per_packet < 100 or avg_samples_per_packet > 3000:
+                        print(f"⚠️ DEBUG: Unusual average samples per packet: {avg_samples_per_packet:.1f}")
             
         except Exception as e:
-            print(f"❌ DEBUG: Packet parsing failed: {e}")
-            raise RuntimeError(f"Opus packet parsing failed: {e}")
+            print(f"❌ DEBUG: OpusParser packet parsing failed: {e}")
+            raise RuntimeError(f"OpusParser packet parsing failed: {e}")
         
-        # CREATE PACKET-BASED ZARR STRUCTURE (following FLAC pattern exactly)
+        # CREATE ZARR STRUCTURE (following FLAC pattern exactly)
         try:
             print(f"🏗️ DEBUG: Creating Zarr structure at {time.time() - start_time:.3f}s")
             
             # Follow FLAC pattern: get file size first
             opus_data_size = len(raw_opus_data)
-            print(f"🏗️ DEBUG: Opus data size for Zarr: {opus_data_size} bytes")
+            print(f"🏗️ DEBUG: Raw Opus data size for Zarr: {opus_data_size} bytes")
             
             # Create audio blob array (EXACTLY like FLAC)
             audio_blob_array = zarr_group.create_array(
@@ -917,6 +1029,9 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
                 "opus_bitrate": opus_bitrate,  # Like FLAC's compression_level
                 "is_ultrasonic": is_ultrasonic,
                 "original_sample_rate": source_sample_rate,
+                "total_packets": len(packets),
+                "total_samples": total_samples,
+                "opus_parser_compatible": True,  # NEW: Flag for OpusParser compatibility
             }
             
             audio_blob_array.attrs.update(attrs)
@@ -925,10 +1040,8 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
             # Create index automatically (like FLAC does)  
             print("🔍 DEBUG: Creating Opus index...")
             try:
-                # Use relative import to avoid __init__.py dependency
-                from . import opus_index_backend
-                opus_index_backend.build_opus_index(zarr_group, audio_blob_array)
-                print("✅ DEBUG: Opus index created successfully")
+                # FUTURE: opus_index_backend will be created for OpusParser-based data
+                print("⏩ DEBUG: Index creation deferred - will be implemented with OpusParser-based backend")
             except ImportError as import_err:
                 print(f"⚠️ DEBUG: Index module import failed: {import_err} - continuing without index")
             except Exception as e:
@@ -940,10 +1053,6 @@ def import_opus_to_zarr(zarr_group: zarr.Group,
         except Exception as e:
             print(f"❌ DEBUG: Zarr structure creation failed: {e}")
             raise
-        
-        # Skip automatic index creation for very large files
-        if len(raw_opus_data) > 50*1024*1024:  # 50MB threshold
-            print("⏩ DEBUG: Skipping automatic index creation for large file (can be done separately)")
         
         total_time = time.time() - start_time
         print(f"🏁 DEBUG: Import completed successfully in {total_time:.1f}s")
@@ -1007,16 +1116,11 @@ if not hasattr(Config, 'keep_legacy_ogg_blob'):
     Config.keep_legacy_ogg_blob = False  # Default: no legacy blob
 
 
-logger.trace("Opus Access API module loaded (packet-based implementation with opuslib support).")
+logger.trace("Opus Access API module loaded (OpusParser-compatible implementation with OGG to Raw Opus extraction).")
 
 
-# opus_access.py - STEP 1.1 ADDITIONS
+# opus_access.py - Container Detection Components
 # Add these components to the existing opus_access.py file
-
-import struct
-from typing import Dict, Optional
-
-# Add after existing imports and constants
 
 class OpusContainerDetector:
     """Smart detection and extraction of Opus streams from various containers"""
@@ -1181,206 +1285,6 @@ class OpusContainerDetector:
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(f"Failed to extract Opus from Matroska: {e}")
 
-
-
-class RawOpusParser:
-    """Parser for raw Opus streams (no container)"""
-    
-    def __init__(self, opus_data: bytes):
-        """Initialize parser with raw Opus stream data"""
-        self.opus_data = opus_data
-        self.pos = 0
-        logger.trace(f"RawOpusParser initialized with {len(opus_data)} bytes")
-    
-    def extract_packets(self) -> Tuple[List[bytes], bytes, int]:
-        """Extract Opus packets from raw stream"""
-        logger.trace("Extracting packets from raw Opus stream...")
-        
-        packets = []
-        opus_header = None
-        total_samples = 0
-        
-        try:
-            # Parse OpusHead header
-            opus_header = self._parse_opus_head()
-            if not opus_header:
-                raise ValueError("No OpusHead found in raw Opus stream")
-            
-            # Skip OpusTags (if present)
-            self._skip_opus_tags()
-            
-            # Extract audio packets
-            packets = self._extract_audio_packets()
-            
-            # Estimate total samples (each packet ≈ 960 samples at 48kHz)
-            total_samples = len(packets) * 960
-            
-            logger.trace(f"Extracted {len(packets)} packets from raw Opus stream")
-            return packets, opus_header, total_samples
-            
-        except Exception as e:
-            logger.error(f"Error in extract_packets(): {e}")
-            # Print detailed debug info
-            logger.error(f"Parser state: pos={self.pos}, data_len={len(self.opus_data)}")
-            raise
-    
-    def _extract_audio_packets(self) -> List[bytes]:
-        """Extract audio packets from remaining stream - FIXED VERSION"""
-        packets = []
-        
-        # Simple approach: Split remaining data into reasonable packet sizes
-        remaining_data = self.opus_data[self.pos:]
-        logger.trace(f"Extracting packets from {len(remaining_data)} bytes remaining data")
-        
-        if len(remaining_data) == 0:
-            logger.warning("No remaining data for packet extraction")
-            return packets
-        
-        # FIXED: More robust packet splitting with proper integer handling
-        pos = 0
-        packet_count = 0
-        
-        while pos < len(remaining_data) and packet_count < 100000:  # Safety limit
-            # FIXED: Ensure all calculations use integers
-            remaining_bytes = len(remaining_data) - pos
-            
-            if remaining_bytes <= 0:
-                break
-            
-            # Estimate packet size (20-200 bytes typical for Opus)
-            # FIXED: Force integer conversion and bounds checking
-            base_packet_size = min(200, remaining_bytes)
-            packet_size = int(base_packet_size)  # EXPLICIT int conversion
-            
-            # FIXED: Ensure packet_size is valid
-            if packet_size <= 0:
-                logger.warning(f"Invalid packet size {packet_size} at position {pos}")
-                break
-            
-            # FIXED: Bounds check before slicing
-            end_pos = min(pos + packet_size, len(remaining_data))
-            
-            if end_pos <= pos:
-                logger.warning(f"Invalid end position {end_pos} <= {pos}")
-                break
-            
-            # Extract packet
-            packet = remaining_data[pos:end_pos]
-            
-            if len(packet) > 0:
-                packets.append(packet)
-                packet_count += 1
-            
-            # FIXED: Ensure pos increment is integer
-            pos = int(end_pos)
-            
-            # Safety check: avoid infinite loops
-            if packet_count % 10000 == 0:
-                logger.trace(f"Processed {packet_count} packets, pos={pos}/{len(remaining_data)}")
-        
-        logger.trace(f"Extracted {len(packets)} audio packets from raw stream")
-        return packets
-    
-    def _parse_opus_head(self) -> Optional[bytes]:
-        """Parse OpusHead header from raw stream"""
-        # Look for OpusHead magic
-        opus_head_pos = self.opus_data.find(OPUS_HEAD_MAGIC)
-        if opus_head_pos == -1:
-            logger.error("OpusHead not found in raw Opus stream")
-            return None
-        
-        self.pos = opus_head_pos
-        
-        # FIXED: Explicit integer conversion for header parsing
-        header_min_size = 19
-        if self.pos + header_min_size > len(self.opus_data):
-            logger.error("Incomplete OpusHead in raw Opus stream")
-            return None
-        
-        # Read basic header (19 bytes minimum)
-        header_data = self.opus_data[self.pos:self.pos + header_min_size]
-        
-        # Parse channel mapping to determine total header size
-        channel_mapping = header_data[18]
-        header_size = header_min_size  # FIXED: Start with known integer
-        
-        if channel_mapping > 0:
-            # Extended header with channel mapping table
-            extended_header_size = 21
-            if self.pos + extended_header_size > len(self.opus_data):
-                logger.error("Incomplete OpusHead channel mapping")
-                return None
-            
-            channel_count = header_data[9]  # Get channel count
-            # FIXED: Explicit integer arithmetic
-            header_size = int(extended_header_size + channel_count)
-        
-        # FIXED: Final bounds check with integer conversion
-        if self.pos + header_size > len(self.opus_data):
-            logger.error(f"Incomplete OpusHead header: need {header_size}, have {len(self.opus_data) - self.pos}")
-            return None
-        
-        opus_header = self.opus_data[self.pos:self.pos + header_size]
-        self.pos += header_size  # FIXED: Ensure this is integer arithmetic
-        
-        logger.trace(f"Parsed OpusHead: {header_size} bytes")
-        return opus_header
-    
-    def _skip_opus_tags(self):
-        """Skip OpusTags if present - FIXED VERSION"""
-        if self.pos + len(OPUS_TAGS_MAGIC) <= len(self.opus_data):
-            if self.opus_data[self.pos:self.pos + len(OPUS_TAGS_MAGIC)] == OPUS_TAGS_MAGIC:
-                # Find end of OpusTags
-                tags_start = self.pos
-                
-                # Skip magic
-                self.pos += len(OPUS_TAGS_MAGIC)
-                
-                # FIXED: Safer OpusTags parsing with bounds checking
-                try:
-                    # Read vendor string length
-                    if self.pos + 4 > len(self.opus_data):
-                        return
-                    
-                    vendor_length_bytes = self.opus_data[self.pos:self.pos + 4]
-                    vendor_length = struct.unpack('<I', vendor_length_bytes)[0]
-                    # FIXED: Explicit integer conversion
-                    vendor_length = int(vendor_length)
-                    
-                    self.pos += 4 + vendor_length
-                    
-                    # Read comment count  
-                    if self.pos + 4 > len(self.opus_data):
-                        return
-                    
-                    comment_count_bytes = self.opus_data[self.pos:self.pos + 4]
-                    comment_count = struct.unpack('<I', comment_count_bytes)[0]
-                    # FIXED: Explicit integer conversion
-                    comment_count = int(comment_count)
-                    
-                    self.pos += 4
-                    
-                    # Skip comments with bounds checking
-                    for i in range(comment_count):
-                        if self.pos + 4 > len(self.opus_data):
-                            break
-                        comment_length_bytes = self.opus_data[self.pos:self.pos + 4]
-                        comment_length = struct.unpack('<I', comment_length_bytes)[0]
-                        # FIXED: Explicit integer conversion and bounds check
-                        comment_length = int(comment_length)
-                        
-                        if self.pos + 4 + comment_length > len(self.opus_data):
-                            break
-                            
-                        self.pos += 4 + comment_length
-                    
-                    total_skipped = self.pos - tags_start
-                    logger.trace(f"Skipped OpusTags: {total_skipped} bytes")
-                    
-                except (struct.error, ValueError, OverflowError) as e:
-                    logger.error(f"Error parsing OpusTags: {e}")
-                    # Skip the problematic tags section
-                    self.pos = tags_start + len(OPUS_TAGS_MAGIC)
 
 # Helper function for integration
 def _extract_raw_opus_stream(audio_file: pathlib.Path, source_params: dict) -> bytes:
