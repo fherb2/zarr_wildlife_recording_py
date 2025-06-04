@@ -1,0 +1,31 @@
+site_name: ZarrWildlifeRecording Library for Python
+site_description: Python module for summarizing environmental sounds (or/and images) and metadata for scientific analysis by using Zarr databases.
+site_author: fherb2
+repo_url: https://github.com/fherb2/zarr_wildlife_recording_py.git
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+    - content.action.edit
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+  - section-index
+
+markdown_extensions:
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+nav:
+  - Overview (README): README.md
+  - Using:
+      - Einleitung: docs/index.md
+      - Benutzung: docs/usage.md
+      - Entwicklerhandbuch: docs/developer_guide.md
+  - API-Referenz:
+      - Modulübersicht: api/index.md

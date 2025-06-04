@@ -1,0 +1,46 @@
+name: Build and Deploy MkDocs Documentation
+
+on:
+  push:
+    branches:
+      - main  # Oder dein Haupt-Branch
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout des Repositories
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Poetry installieren
+      - name: Set up Poetry
+        uses: snok/install-poetry@v1.8.0
+        with:
+          version: "1.8.0"
+
+      # 3. Installiere Abhängigkeiten
+      - name: Install dependencies
+        run: |
+          poetry install --with docs
+
+      # 4. Baue die MkDocs-Dokumentation
+      - name: Build MkDocs site
+        run: |
+          poetry run mkdocs build
+
+      # 5. Deploy der Dokumentation auf GitHub Pages
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site  # Das Verzeichnis, in dem MkDocs die Seite baut
+          user_name: 'GitHub Actions'
+          user_email: 'actions@github.com'

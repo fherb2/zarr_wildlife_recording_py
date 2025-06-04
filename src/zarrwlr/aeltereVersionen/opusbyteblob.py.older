@@ -1,0 +1,117 @@
+import numpy as np
+import struct
+import zarr
+import logging
+from .exceptions import OggImportError
+
+# get the module logger
+logger = logging.getLogger(__name__)
+
+# Konstanten für Ogg-Container
+OGG_PAGE_HEADER_SIZE = 27
+OGG_MAX_PAGE_SIZE = 65536
+
+
+class OggOpusIndexer:
+    """Indexer für Opus-Dateien im Ogg-Container"""
+    
+    def __init__(self, zarr_group, audio_blob_array):
+        """
+        Initialisiert den Indexer
+        
+        Args:
+            zarr_group: Zarr-Gruppe, in der die Audiodaten und der Index gespeichert werden
+            audio_blob_array: Array mit den binären Audiodaten
+        """
+        self.zarr_group = zarr_group
+        self.audio_blob_array = audio_blob_array
+        
+    def build_index(self):
+        """
+        Erstellt einen Index für Ogg-Pages, der die Byte-Positionen und Granule-Positionen 
+        (Sample-Positionen) enthält
+        
+        Returns:
+            Das erstellte Index-Array
+        """
+        data = self.audio_blob_array
+        data_len = data.shape[0]
+
+        chunk_entries = []
+        max_entries_per_chunk = 65536  # entspricht ~1MB RAM bei typ int64
+
+        # Vorab leeres Zarr-Array mit großzügiger Maxshape
+        index_zarr = self.zarr_group.create_array(
+            name="ogg_page_index",
+            shape=(0, 2),
+            chunks=(max_entries_per_chunk, 2),
+            dtype=np.uint64,
+            maxshape=(None, 2),
+            overwrite=True
+        )
+
+        total_entries = 0
+        offset = 0
+        invalid_header_count = 0
+        while offset + OGG_PAGE_HEADER_SIZE < data_len:
+            # Überprüfen, ob wir einen Ogg-Page-Header finden
+            if not np.array_equal(data[offset:offset+4], np.frombuffer(b'OggS', dtype=np.uint8)):
+                offset += 1
+                # Robustheit bei fehlerhaften Daten verbessern
+                invalid_header_count += 1
+                if invalid_header_count > 1024:
+                    raise OggImportError("Zu viele ungültige Ogg-Header. Import wird abgebrochen.")
+                continue
+
+            # Ogg-Page-Header extrahieren
+            header = data[offset : offset + OGG_PAGE_HEADER_SIZE]
+            # Granule-Position extrahieren (64-bit, little-endian)
+            granule_pos = struct.unpack_from('<Q', header.tobytes(), 6)[0]
+            # Segment-Anzahl aus dem Header lesen
+            segment_count = header[26]
+
+            # Segment-Tabelle lesen
+            seg_table_start = offset + OGG_PAGE_HEADER_SIZE
+            seg_table_end = seg_table_start + segment_count
+            if seg_table_end > data_len:
+                raise OggImportError("Daten nicht vollständig beim Indexieren.")
+            
+            segment_table = data[seg_table_start:seg_table_end]
+            # Größe des Page-Body berechnen (Summe aller Segment-Größen)
+            page_body_size = int(np.sum(segment_table))
+
+            # Gesamtgröße der Page berechnen
+            page_size = OGG_PAGE_HEADER_SIZE + segment_count + page_body_size
+            if offset + page_size > data_len:
+                raise OggImportError("Daten nicht vollständig beim Indexieren.")
+
+            # Byte-Offset und Granule-Position in Einträge aufnehmen
+            chunk_entries.append((offset, granule_pos))
+            offset += page_size
+
+            # Wenn genug Einträge gesammelt wurden, zum Zarr-Array hinzufügen
+            if len(chunk_entries) >= max_entries_per_chunk:
+                chunk_np = np.array(chunk_entries, dtype=np.uint64)
+                index_zarr.resize(total_entries + chunk_np.shape[0], axis=0)
+                index_zarr[total_entries : total_entries + chunk_np.shape[0], :] = chunk_np
+                total_entries += chunk_np.shape[0]
+                chunk_entries = []
+
+        # Verbleibende Einträge hinzufügen
+        if chunk_entries:
+            chunk_np = np.array(chunk_entries, dtype=np.uint64)
+            index_zarr.resize(total_entries + chunk_np.shape[0], axis=0)
+            index_zarr[total_entries : total_entries + chunk_np.shape[0], :] = chunk_np
+            total_entries += chunk_np.shape[0]
+
+        # Metadaten zum Index-Array hinzufügen
+        sample_rate = self.audio_blob_array.attrs.get('sample_rate', 48000)
+        channels = self.audio_blob_array.attrs.get('nb_channels', 1)
+        sampling_rescale_factor = self.audio_blob_array.attrs.get('sampling_rescale_factor', 1.0)
+        
+        index_zarr.attrs['sample_rate'] = sample_rate
+        index_zarr.attrs['channels'] = channels
+        index_zarr.attrs['sampling_rescale_factor'] = sampling_rescale_factor
+        
+        logger.info(f"Ogg-Opus-Index erstellt mit {total_entries} Seiten")
+        return index_zarr

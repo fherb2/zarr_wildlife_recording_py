@@ -1,0 +1,281 @@
+{
+    // Note: VSCode allows (and demonstrate it in examples), that we can use // as start of a comment.
+    //       This differs from the JSON standard. The standard doesn't know any comments sadly.
+
+    // The name of the container created by VSCode with this configuration:
+    "name": "zarrwlr_devcontainer_ubuntu24_py311", // You should change the name, if you change the following image.
+    // The image to create the container:
+
+    "image": "registry.hzdr.de/fwf/libraries/dockerfiles/devcontainers-python-cuda-imageprocessing/zarrwlr_dev_ub22_py311:rel-1.0.0-2183f2",
+    // alt: "registry.hzdr.de/fwf/libraries/dockerfiles/devcontainers-python-cuda-imageprocessing/devcontainer_py3.11:rel-1.0.0-e1f654",
+
+
+    // see: https://code.visualstudio.com/remote/advancedcontainers/start-processes
+    // -> "When referencing a Dockerfile in devcontainer.json, the default entrypoint
+    //    and command is overridden. First, disable this behavior using the overrideCommand
+    //    property." We use this since the CMD in JupyterLab in our Image:
+    "overrideCommand": false,
+
+    // Hints for using VSCode predefined environment variables like '${userHome}':
+    // ---------------------------------------------------------------------------
+    //  - ${userHome} - the path of the user's home folder
+    //  - ${workspaceFolder} - the path of the folder opened in VS Code
+    //  - ${workspaceFolderBasename} - the name of the folder opened in VS Code without any slashes (/)
+    // For details see: https://code.visualstudio.com/docs/editor/variables-reference
+
+    // Mounting of you project folder
+    // ------------------------------
+    // Mounts the folder you are inside if you are reopens VSCode in the development container
+    // ("Reopen in Container" command").
+    // Since the start script (entrypoint.sh) of the Docker image changes the standard
+    // user account 'jovyan' of the docker image to your user id, you will see your own rights as 'jovian'
+    // user. During yor work inside the container 'jovian' is an alias to your user account.
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "workspaceFolder": "/workspace",
+
+    // Additional mount points
+    // -----------------------
+    "mounts": [
+            // /home/hostuser
+            // --------------
+            // Mount the user home directory at the used Docker engin host(!) to /home/hostuser .
+            // Docker engin host means: If you are working remotely, this its your user home on this
+            // remote system!
+            // Since the start script (entrypoint.sh) of the Docker image changes the standard
+            // user account 'jovyan' to the user id of the owner of the project folder, you will see
+            // your own rights as 'jovian' user. (However, if the owner of the project folder is a
+            // different user, this behaviour may differ).
+            "source=${localEnv:HOME},target=/home/hostuser,type=bind,consistency=cached"
+        ],
+    "runArgs":
+    // for GPU use:    ["--gpus", "all"],
+    // ------------
+    //
+    // ------------------------------------------------------------------------
+    //
+    // for X11 inside devcontainer:
+    // ----------------------------
+    //
+    // A word before: >> It doesn' work fine in much cases. << Try to avoid this
+    // ============== if possible. If you are working on a non-headless system, so use
+    //                a Remote-Desktop solution. Sometimes NoMachine has a better
+    //                response time at Kuntu (KDE-Desktop) in comparison some other
+    //                open source solutions.
+    //
+    // NOTE: Use a terminal and start ssh -X ... session befor starting
+    //       the container. We need this to get an open X11-Display.
+    //
+    //    ====> If you work remote:
+    //      setup server: /etc/ssh/sshd_config:
+    //        X11Forwarding yes
+    //        X11DisplayOffset 10
+    //        AllowTcpForwarding yes
+    //      setup client (remote PC):
+    //        ForwardX11 yes
+    //        ForwardX11Trusted yes
+    //
+    //      Your ssh connection call inside VSCode
+    //      may not have an X11-forwarding!!! Only option A (ForwardAgent)
+    //      is allowed. Otherwise the forwarding from inside the container
+    //      doesn't work. Use
+    //
+    //        ssh name@rechner -A
+    //
+    //      If you already have a configured ssh access, so go into the
+    //      configuration file you used (like ~/.ssh/config) and disable:
+    //        # ForwardX11 yes
+    //        # ForwardX11Trusted yes
+    //
+    //      (You can test this by call 'xeyes' from remote terminal,
+    //      install x11-apps before)
+    //    =====
+    //    ... and add following strings into the "runArgs" list:
+    //     [
+    //       "--net", "host",
+    //       "-e", "DISPLAY=localhost:10.0",
+    //      "-e", "DISPLAY=localhost:${DISPLAY}",
+      //      "-e", "DISPLAY=${env:DISPLAY}",
+      //       "-e", "XAUTHORITY=/tmp/.Xauthority",
+    //       "-v", "${localEnv:HOME}/.Xauthority:/tmp/.Xauthority",
+    //       "-v", "/tmp/.X11-unix:/tmp/.X11-unix"
+    //       ],
+    // other example:
+    // [
+    //     "--network=host",
+    //     "--cap-add=NET_RAW",
+    //     "--cap-add=NET_ADMIN",
+    //     // "--privileged",
+    //     "-v", "/etc/resolv.conf:/etc/resolf.conf"
+    //     // "-P",
+    //     // "--device /dev/net/tun",
+    //   ],
+
+    // ------------------------------------------------------------------------
+    // Standard is: no run options
+    ["--device", "/dev/snd", // für direkten ALSA-Zugriff (falls das geht)
+    "-v", "${env:HOME}/.config/pulse:/home/vscode/.config/pulse",  // Authentifizierung PulseAudio
+    "-v", "/run/user/1000/pulse:/run/user/1000/pulse",             // PulseAudio Socket
+    "-e", "PULSE_SERVER=unix:/run/user/1000/pulse/native"           // Hier lauscht PulseAudio
+    ],
+
+
+    // in case the image includes JupyterLab, ... :
+    // --------------------------------------------
+    // "forwardPorts": [8888],
+    // "portsAttributes": {
+    //     "8888": {
+    //         "visibility": "public"
+    //     }
+    // },
+
+    // Some initializing
+  //  "postCreateCommand": "./.devcontainer/post_create_script.sh",
+  //  "postStartCommand": "./.devcontainer/post_start_script.sh",
+
+    // Costomizations of the VSCode you lets run with the specified Docker image.
+    // --------------------------------------------------------------------------
+    //
+    // You can change extensions/plugins here. If you add an extension in running VSCode,
+    // so you have to reinstall it every time you starts the development container. Put
+    // the extension to this point and its installed by first use of this configuration.
+    // Use the name you can find at  in the 'ext install ...' field at
+    // https://marketplace.visualstudio.com/ .
+    //
+    //
+    "customizations": {
+      // Configure properties specific to VS Code.
+      "vscode": {
+        // Set *default* container specific settings.json values on container create.
+                  // "settings": {
+                  // 	"editor.formatOnSave": true,
+                  // 	"files.insertFinalNewline": true,
+                  // 	"[makefile]": {
+                  // 		"editor.insertSpaces": false,
+                  // 		"editor.detectIndentation": false
+                  // 	}
+                  // },
+
+              // Add the IDs of extensions you want installed when the container is created.
+              "extensions": [
+
+              // Usability enhancements of VSCode
+              // ================================
+              "ms-vscode.remote-server", // Remote-Tunnels plugin; using see: https://code.visualstudio.com/docs/remote/tunnels
+                                      //                        and: https://marketplace.visualstudio.com/items?itemName=ms-vscode.remote-server
+
+              // "jabacchetta.vscode-essentials",    // "Turn VSCode into a supercharged IDE." – Includes a long list of features, injcluding spell checker; see:
+                                                  // https://marketplace.visualstudio.com/items?itemName=jabacchetta.vscode-essentials
+
+              "ban.spellright",   // Another "Multilingual, Offline and Lightweight Spellchecker" – Uses system built in 'Hunspell' spell checker library
+              // usage see: https://marketplace.visualstudio.com/items?itemName=ban.spellright
+
+              // "streetsidesoftware.code-spell-checker", // Code Spell Checker – see: https://marketplace.visualstudio.com/items?itemName=streetsidesoftware.code-spell-checker
+              // "streetsidesoftware.code-spell-checker-german", // adds German language to streetsidesoftware.code-spell-checker
+
+              // "oijaz.unicode-latex",  // Unicode Latex – "Insert unicode symbols for latex names";
+                                      // see: https://marketplace.visualstudio.com/items?itemName=oijaz.unicode-latex
+                 
+              // Markdown
+              // ========
+
+              "adamerose.markdown-wysiwyg", // Markdown Editor – A powerful markdown WYSIWYG editor; 
+                                            // CTRL+SHIFT+E toggles Editor <–> Plain Text; see: https://marketplace.visualstudio.com/items?itemName=adamerose.markdown-wysiwyg
+
+              // TOML
+              // ====
+
+              "tamasfe.even-better-toml",     // "Even Better TOML" – "Fully-featured TOML support" see: https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml
+
+              // Python relating
+              // ===============
+              "ms-python.python", // Python extension for Visual Studio Code, see: https://marketplace.visualstudio.com/items?itemName=ms-python.python
+
+              "ms-python.debugpy",    // Microsoft Python Debugger extension
+                                      // see: https://marketplace.visualstudio.com/items?itemName=ms-python.debugpy
+
+              "ms-python.vscode-pylance",     // Microsoft: A performant, feature-rich language server for Python in VS Code
+                                              // see: https://marketplace.visualstudio.com/items?itemName=ms-python.vscode-pylance
+
+              "VisualStudioExptTeam.vscodeintellicode",   // Microsoft IntelliCode plugin – "The Visual Studio IntelliCode extension provides AI-assisted development features"
+                                                          // see: https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.vscodeintellicode
+
+              "KevinRose.vsc-python-indent",  // Python Indent plugin – "Correct Python indentation in Visual Studio Code."
+                                              // usage: https://marketplace.visualstudio.com/items?itemName=KevinRose.vsc-python-indent
+
+              "njpwerner.autodocstring",  // autoDocstring plugin – Python Docstring Generator,
+                                          // using see: https://marketplace.visualstudio.com/items?itemName=njpwerner.autodocstring
+
+              "njqdev.vscode-python-typehint",    // Python Type Hint plugin – see: https://marketplace.visualstudio.com/items?itemName=njqdev.vscode-python-typehint
+
+              "magicstack.MagicPython",   // another Python Syntax Highlighter – see: https://marketplace.visualstudio.com/items?itemName=magicstack.MagicPython
+
+              "LittleFoxTeam.vscode-python-test-adapter", // Python Test Explorer plugin
+                                                          // usage see: https://marketplace.visualstudio.com/items?itemName=LittleFoxTeam.vscode-python-test-adapter
+
+            //   "076923.python-image-preview",  // Python Image Preview – "You can quickly check your Python image data."
+                                              // using see: https://marketplace.visualstudio.com/items?itemName=076923.python-image-preview
+
+              // "donjayamanne.python-environment-manager",  // DEPRICATED! Python Environment Manager plugin
+                                                          //             see: https://marketplace.visualstudio.com/items?itemName=donjayamanne.python-environment-manager
+
+              "donjayamanne.python-extension-pack", // bundles some Python related extension packs BETTER: include here only what you really need
+                                                  // see: https://marketplace.visualstudio.com/items?itemName=donjayamanne.python-extension-pack
+
+              // "batisteo.vscode-django",   // Django plugin – "Beautiful syntax and scoped snippets for perfectionists with deadlines"
+                                          //                  see: https://marketplace.visualstudio.com/items?itemName=batisteo.vscode-django
+
+              // "wholroyd.jinja",   // Jinja extension – see: https://marketplace.visualstudio.com/items?itemName=wholroyd.jinja
+                                  //                   Jinjy usage: https://realpython.com/primer-on-jinja-templating/
+
+              "charliermarsh.ruff",   // Ruff extension – see: https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff
+
+              "ms-python.mypy-type-checker",  // Mypy Type Checker – Microsoft, see: https://marketplace.visualstudio.com/items?itemName=ms-python.mypy-type-checker
+
+              // Jupyter Extension
+              // =================
+              // "ms-toolsai.jupyter",   // Jupyter Extension for Visual Studio Code, see: https://marketplace.visualstudio.com/items?itemName=ms-toolsai.jupyter
+
+              // C/C++ relating
+              // ==============
+              "ms-vscode.cpptools"   // C/C++ for Visual Studio Code plugin – The C/C++ extension adds language support for C/C++ to Visual
+                                      //                                       Studio Code, including editing (IntelliSense) and debugging features.
+                                      // pre-requisites and using see: https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools
+
+            //   "ms-vscode.cmake-tools"    // Extended CMake support plugin from Microsoft
+                                          // see: https://marketplace.visualstudio.com/items?itemName=ms-vscode.cmake-tools
+                                          // ! This extension collects usage/user data and sends it to Microsoft.
+
+            //   "twxs.cmake",   // CMAKE langage support for Visual Studio Code
+                              // see: https://marketplace.visualstudio.com/items?itemName=twxs.cmake
+
+
+              ],
+              "settings": {
+                 "python.defaultInterpreterPath": "/home/jovyan/.venv3.11/bin/python",
+                 "autoDocstring.docstringFormat": "numpy",
+                 "autoDocstring.generateDocstringOnEnter": true
+
+                //  "python.analysis.typeCheckingMode": "off",
+                //  "python.languageServer": "Pylance",
+
+                //   "python.testing.pytestEnabled": true,
+                //   "python.testing.unittestEnabled": false,
+                //   "python.testing.pytestArgs": [
+                //       "tests"
+                //   ],
+                  // Ruff
+                //   "ruff.configuration": "/workspace/pyproject.toml",
+                //   "python.linting.ruffEnabled": true,
+                //   "python.linting.enabled": true,
+                //   "[python]": {
+                //       "editor.formatOnSave": false,
+                //       "editor.codeActionsOnSave": {
+                //           "source.fixAll": "explicit",
+                //           "source.organizeImports": "explicit"
+                //       },
+                //       "editor.defaultFormatter": "charliermarsh.ruff"
+                //   }
+               }
+      }
+  }
+}
