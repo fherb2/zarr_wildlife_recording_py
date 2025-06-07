@@ -159,6 +159,35 @@ def decode_aac_segment_pyav(aac_data: bytes,
 
 ### **Phase 2: AAC Index Module (`aac_index_backend.py`)**
 
+#### **Index Structur**
+
+Some Notes for fixing this structure:
+
+- **Frame flags** don't need to be stored - Each frame is like a key frame. But there is an overlapp: We need some samples from the frame befor to can decode exactly at the beginning of the interesting frame. If we start random access decoding, so we have to start a frame before the start frame to reconstruct the samples exactly. But if we do it, we don't need any frame flags to memorize in the index.
+- **Sample count** of the frame – A frame can have 1024 or 960 samples by definition. But ffmpeg can only encode 1024 samples. And in the most cases othe tools can not handle 960 samples. Since we import our audio sources with ffmpeg into the database, we can get only 1024 sample frames! So we don't need this parameter inside the index. But, we can write a 'getter' what gives back always 1024 as requested 'sample count' parameter:
+```
+def get_aac_frame_samples():
+    return 1024  # FFmpeg erzeugt immer 1024-Sample-Frames
+```
+- **Time stamps** of frame don't need to be stored - If we store the sample position of the first frame, we can calculate the right time stamp exactly by using the sampling frequency:
+```
+def calculate_timestamp_ms(sample_pos, sample_rate):
+    return int(sample_pos * 1000 / sample_rate)
+``` 
+
+**Index Structure (3 columns per frame):**
+This is the structure as structured Numpy array
+```
+[byte_offset, frame_size, sample_pos]
+     ↓            ↓           ↓      
+  Position    Size bytes   Cumulative
+  in stream   of frame     sample pos
+ (np.uint64) (np.uint16)  (np.uint64)
+```
+Saved in Zarr Arrays, the Numpy structure is converted to a byte stream with a strong 18 bytes index offset. From Zarr Array back into memory we can address structure elements by start address and offset and we can remap the full byte array into a structured Numpy array.
+
+
+
 #### **Index Creation System**
 ```python
 # Main index builder
@@ -398,6 +427,7 @@ and replace ```<WRITE WHAT WE LOAD> ``` with senfull content.
 - **Target Directory** for Zarr data base (version 3) and test result files is ./tests/testresults/
 - **Cleaning Up** at each test start is mandatory: First remove all content in ./tests/testresults/
 - **Zarr Database Structur** is fixed for the import range of audio data. Following is an example to set up the structur
+- **PyTest** - All official tests must have a structure to be a pytest compatible test. So we can use the same tests also for CI. Tests may have additional prints for debugging outputs which should be communicated with [Claude.ai](claude.ai). But: Special debug tests from claude.ai what we use for finding current errors don't need this structure. Such tests has to be short and straight forward.  
 
 ### Helpers for all tests
 
@@ -433,6 +463,14 @@ def prepare_zarr_database() -> zarr.Group:
 ```
 
 ---
+
+## Anweisung für Claude.ai
+
+- Für Änderungen in den bestehenden Dateien, schreibe entweder komplette Datei-Artifacts mit den Änderungen oder einzelne Funktionen mit einer Zusatzerklärung, was ausgetauscht werden muss. Bitte schreibe keine Scripte, die die Quellfiles "in-line" manipulieren. Entweder Du gibst das gesamte File als Artifact zurück oder übergibst mir genau beschriebene Bereiche, die ich dann selbst austausche.
+- Vermeide Icons, Emojis oder sonstiges in Programmen und loggings. In Konzept- und Statusfiles sind sie erlaubt. In Testfiles sind grundlegende Symbole für Erfolg und Fehler oder Warnung und ähnliches erlaubt, soweit das die schnelle Aufnahme der Information durch den Leser fördert.
+- Die Kommunikationssprache ist deutsch. In Software wird aber ausschließlich in English kommentiert und Ausgaben, Logs, Fehlermeldungen erzeugt.
+
+
 
 
 **This concept provides the foundation for a production-ready AAC random access system that surpasses the Opus approach in storage efficiency while maintaining excellent performance.**

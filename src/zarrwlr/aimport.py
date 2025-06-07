@@ -372,7 +372,7 @@ class FileMeta:
         if nb_streams == 0:
             logger.error(f"No audio streams found in file {file.name} by using ffprobe.")
         elif nb_streams == 1:
-            logger.debug("Found exactly 1 audio strem in file {file.name} by using ffprobe.")
+            logger.debug(f"Found exactly 1 audio stream in file {file.name} by using ffprobe.")
         else:
             logger.warning(f"Found {nb_streams} audio streams in file {file.name} by using ffprobe. Typically, the first of them will be imported only.")
 
