@@ -103,150 +103,6 @@ class AACFrameInfo:
                 f"time={self.timestamp_ms}ms)")
 
 
-class AACStreamAnalyzer:
-    """Analyzes AAC streams to extract frame information"""
-    
-    def __init__(self, sample_rate: int = 48000):
-        self.sample_rate = sample_rate
-        self.default_frame_samples = 1024  # Standard AAC frame size
-        
-    def analyze_aac_stream_pyav(self, aac_data: bytes) -> List[AACFrameInfo]:
-        """
-        Analyze AAC stream using PyAV to extract frame information
-        
-        Args:
-            aac_data: Raw AAC data bytes
-            
-        Returns:
-            List of AACFrameInfo objects
-        """
-        logger.trace("Starting AAC stream analysis with PyAV...")
-        
-        # Create temporary file for PyAV analysis
-        with tempfile.NamedTemporaryFile(suffix='.aac', delete=False) as temp_file:
-            temp_file.write(aac_data)
-            temp_path = temp_file.name
-        
-        try:
-            return self._analyze_with_pyav(temp_path)
-        finally:
-            # Clean up temporary file
-            pathlib.Path(temp_path).unlink()
-    
-    def _analyze_with_pyav(self, file_path: str) -> List[AACFrameInfo]:
-        """Internal PyAV analysis implementation"""
-        frame_infos = []
-        
-        try:
-            # Open container and get audio stream
-            container = av.open(file_path)
-            audio_stream = container.streams.audio[0]
-            
-            logger.trace(f"AAC stream info: {audio_stream.sample_rate}Hz, {audio_stream.channels}ch")
-            
-            # Analyze packets to build frame index
-            current_byte_offset = 0
-            frame_index = 0
-            current_timestamp_ms = 0
-            
-            for packet in container.demux(audio_stream):
-                if packet.size > 0:
-                    # Calculate timestamp in milliseconds
-                    if packet.pts is not None:
-                        current_timestamp_ms = int(packet.pts * packet.time_base * 1000)
-                    else:
-                        # Estimate based on frame count and sample rate
-                        current_timestamp_ms = int((frame_index * self.default_frame_samples * 1000) / self.sample_rate)
-                    
-                    # Create frame info
-                    frame_info = AACFrameInfo(
-                        frame_index=frame_index,
-                        byte_offset=current_byte_offset,
-                        frame_size=packet.size,
-                        sample_count=self.default_frame_samples,  # Standard AAC frame size
-                        timestamp_ms=current_timestamp_ms,
-                        is_keyframe=True  # AAC frames are generally self-contained
-                    )
-                    
-                    frame_infos.append(frame_info)
-                    
-                    # Update for next iteration
-                    current_byte_offset += packet.size
-                    frame_index += 1
-                    
-                    if frame_index % 1000 == 0:
-                        logger.trace(f"Analyzed {frame_index} AAC frames...")
-            
-            container.close()
-            
-        except Exception as e:
-            logger.warning(f"PyAV analysis failed: {e}. Falling back to manual parsing.")
-            return self._analyze_manual_adts(file_path)
-        
-        logger.trace(f"PyAV analysis completed: {len(frame_infos)} frames found")
-        return frame_infos
-    
-    def _analyze_manual_adts(self, file_path: str) -> List[AACFrameInfo]:
-        """
-        Fallback manual ADTS frame parsing
-        
-        Args:
-            file_path: Path to AAC file
-            
-        Returns:
-            List of AACFrameInfo objects
-        """
-        logger.trace("Using manual ADTS parsing as fallback...")
-        
-        frame_infos = []
-        
-        with open(file_path, 'rb') as f:
-            aac_data = f.read()
-        
-        pos = 0
-        frame_index = 0
-        
-        while pos < len(aac_data) - 7:  # Need at least 7 bytes for ADTS header
-            # Look for ADTS sync word (0xFFF)
-            if pos + 1 < len(aac_data):
-                sync_word = int.from_bytes(aac_data[pos:pos+2], 'big')
-                
-                if (sync_word & 0xFFF0) == 0xFFF0:  # ADTS sync pattern
-                    try:
-                        # Parse ADTS header to get frame length
-                        if pos + 6 < len(aac_data):
-                            # ADTS frame length is in bits 30-43 of the header
-                            header_bytes = aac_data[pos:pos+7]
-                            frame_length = ((header_bytes[3] & 0x03) << 11) | \
-                                         (header_bytes[4] << 3) | \
-                                         ((header_bytes[5] & 0xE0) >> 5)
-                            
-                            if frame_length > 7 and frame_length < 8192:  # Reasonable frame size
-                                timestamp_ms = int((frame_index * self.default_frame_samples * 1000) / self.sample_rate)
-                                
-                                frame_info = AACFrameInfo(
-                                    frame_index=frame_index,
-                                    byte_offset=pos,
-                                    frame_size=frame_length,
-                                    sample_count=self.default_frame_samples,
-                                    timestamp_ms=timestamp_ms,
-                                    is_keyframe=True
-                                )
-                                
-                                frame_infos.append(frame_info)
-                                
-                                pos += frame_length
-                                frame_index += 1
-                                continue
-                    
-                    except Exception:
-                        pass  # Continue searching
-            
-            pos += 1
-        
-        logger.trace(f"Manual ADTS parsing completed: {len(frame_infos)} frames found")
-        return frame_infos
-
 
 # ##########################################################
 #
@@ -254,6 +110,47 @@ class AACStreamAnalyzer:
 # ========================
 #
 # ##########################################################
+
+def _analyze_real_aac_frames(aac_data: bytes, sample_rate: int) -> List[dict]:
+    """Echte AAC Frame-Analyse statt Placeholder"""
+    frames = []
+    pos = 0
+    frame_idx = 0
+    current_sample = 0
+    
+    while pos < len(aac_data) - 7:  # ADTS header = 7 bytes minimum
+        # Suche ADTS Sync Pattern (0xFFF)
+        if pos + 1 < len(aac_data):
+            sync_word = int.from_bytes(aac_data[pos:pos+2], 'big')
+            
+            if (sync_word & 0xFFF0) == 0xFFF0:  # ADTS sync
+                # Parse ADTS header für Frame-Länge
+                if pos + 6 < len(aac_data):
+                    header = aac_data[pos:pos+7]
+                    frame_length = ((header[3] & 0x03) << 11) | \
+                                (header[4] << 3) | \
+                                ((header[5] & 0xE0) >> 5)
+                    
+                    if 7 <= frame_length <= 8192:  # Vernünftige Frame-Größe
+                        frames.append({
+                            'byte_offset': pos,
+                            'frame_size': frame_length,
+                            'sample_pos': current_sample,
+                            'timestamp_ms': int(current_sample * 1000 / sample_rate),
+                            'sample_count': 1024,  # Standard AAC
+                            'frame_flags': 1
+                        })
+                        
+                        pos += frame_length
+                        current_sample += 1024
+                        frame_idx += 1
+                        continue
+        
+        pos += 1
+    
+    return frames
+
+
 
 def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array, 
                    use_parallel: bool = True, max_workers: int = None) -> zarr.Array:
@@ -291,12 +188,42 @@ def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array,
     # Load audio bytes
     audio_bytes = bytes(audio_blob_array[()])
     
-    # Create stream analyzer
-    analyzer = AACStreamAnalyzer(sample_rate)
-    
-    # Analyze AAC stream to extract frame information
-    logger.trace("Analyzing AAC stream for frame information...")
-    frame_infos = analyzer.analyze_aac_stream_pyav(audio_bytes)
+    # Real AAC frame analysis using ADTS parsing
+    logger.trace("Analyzing real AAC ADTS frames...")
+    frames_info_dicts = _analyze_real_aac_frames(audio_bytes, sample_rate)
+
+    # Convert to AACFrameInfo objects for compatibility
+    frame_infos = []
+    for frame_dict in frames_info_dicts:
+        # Create AACFrameInfo object if the class exists
+        try:
+            frame_info = AACFrameInfo(
+                frame_index=len(frame_infos),
+                byte_offset=frame_dict['byte_offset'],
+                frame_size=frame_dict['frame_size'],
+                sample_count=frame_dict['sample_count'],
+                timestamp_ms=frame_dict['timestamp_ms'],
+                is_keyframe=True
+            )
+            frame_infos.append(frame_info)
+        except NameError:
+            # Fallback if AACFrameInfo class doesn't exist
+            class SimpleFrameInfo:
+                def __init__(self, **kwargs):
+                    for k, v in kwargs.items():
+                        setattr(self, k, v)
+            
+            frame_info = SimpleFrameInfo(
+                byte_offset=frame_dict['byte_offset'],
+                frame_size=frame_dict['frame_size'],
+                sample_count=frame_dict['sample_count'],
+                timestamp_ms=frame_dict['timestamp_ms'],
+                is_keyframe=True,
+                sample_position=0  # Will be set below
+            )
+            frame_infos.append(frame_info)
+
+    logger.trace(f"Found {len(frame_infos)} real AAC frames")
     
     if len(frame_infos) < 1:
         raise ValueError("Could not find AAC frames in audio data")
