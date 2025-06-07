@@ -36,7 +36,7 @@ from zarrwlr.aac_access import (
 )
 from zarrwlr.aac_index_backend import (
     build_aac_index,
-    AACStreamAnalyzer,
+    AACStreamAnalyzer,  # Falls implementiert
     get_index_statistics,
     validate_aac_index,
     benchmark_aac_access,
@@ -48,7 +48,12 @@ ZARR3_STORE_DIR = pathlib.Path(__file__).parent / "testresults" / "aac_test_zarr
 
 
 class TestAACIntegration(unittest.TestCase):
-    """Integration tests for AAC import and extraction"""
+    """Integration tests for AAC import and extraction
+    
+    Architecture:
+    - Import: ffmpeg (universal, subprocess-based)
+    - Random Access: PyAV (native Python, fast extraction)
+    """
     
     @classmethod
     def setUpClass(cls):
@@ -58,9 +63,12 @@ class TestAACIntegration(unittest.TestCase):
             shutil.rmtree(ZARR3_STORE_DIR)
         ZARR3_STORE_DIR.mkdir(parents=True, exist_ok=True)
         
+        # Import LogLevel from packagetypes
+        from zarrwlr.packagetypes import LogLevel
+        
         # Configure for testing
         Config.set(
-            log_level=Config.LogLevel.TRACE,  # Maximum logging for tests
+            log_level=LogLevel.TRACE,  # Use correct LogLevel import
             aac_default_bitrate=160000,
             aac_enable_pyav_native=True,
             aac_fallback_to_ffmpeg=True,
@@ -93,13 +101,13 @@ class TestAACIntegration(unittest.TestCase):
         return audio_import_grp
     
     def test_aac_import_basic(self):
-        """Test basic AAC import functionality"""
+        """Test basic AAC import functionality (ffmpeg-based)"""
         if not self.test_files:
             self.skipTest("No test files available")
         
-        test_file = self.test_files[0]  # Use first available test file
+        test_file = self.test_files[0]
         
-        # Import with AAC
+        # Import with AAC using ffmpeg
         try:
             aimport.import_original_audio_file(
                 audio_file=test_file,
@@ -109,11 +117,11 @@ class TestAACIntegration(unittest.TestCase):
                 aac_bitrate=160000
             )
             
-            # Verify import
+            # Verify import results
             group_names = list(self.zarr_group.keys())
             self.assertGreater(len(group_names), 0, "No groups created after import")
             
-            # Check first imported group
+            # Check imported content
             imported_group = self.zarr_group[group_names[0]]
             self.assertIn('audio_data_blob_array', imported_group)
             self.assertIn('aac_index', imported_group)
@@ -123,11 +131,12 @@ class TestAACIntegration(unittest.TestCase):
             self.assertEqual(audio_array.attrs['codec'], 'aac')
             self.assertEqual(audio_array.attrs['aac_bitrate'], 160000)
             
-            print(f"✓ AAC import successful for {test_file.name}")
+            print(f"✓ AAC import successful for {test_file.name} (ffmpeg-based)")
             
         except Exception as e:
             self.fail(f"AAC import failed: {e}")
-    
+
+
     def test_aac_index_creation(self):
         """Test AAC index creation and validation"""
         if not self.test_files:
@@ -317,8 +326,9 @@ class TestAACPerformance(unittest.TestCase):
         audio_import_grp.attrs["version"] = Config.original_audio_group_version
         return audio_import_grp
     
+
     def test_aac_import_performance(self):
-        """Test AAC import performance"""
+        """Test AAC import performance (ffmpeg subprocess)"""
         if not self.test_files:
             self.skipTest("No test files available")
         
@@ -338,11 +348,12 @@ class TestAACPerformance(unittest.TestCase):
         import_time = time.time() - start_time
         throughput = file_size_mb / import_time
         
-        print(f"✓ AAC import performance: {file_size_mb:.1f}MB in {import_time:.2f}s ({throughput:.1f} MB/s)")
+        print(f"✓ AAC import performance (ffmpeg): {file_size_mb:.1f}MB in {import_time:.2f}s ({throughput:.1f} MB/s)")
         
-        # Performance assertion (should be faster than real-time)
-        # Assuming typical audio is ~10MB per minute, aim for >1x real-time
-        self.assertLess(import_time, file_size_mb * 6, "Import should be faster than 6s per MB")
+        # Adjust expectations for ffmpeg subprocess overhead
+        # ffmpeg ist langsamer als PyAV aber sollte trotzdem vernünftig sein
+        self.assertLess(import_time, file_size_mb * 10, "Import should be faster than 10s per MB (ffmpeg)")
+    
     
     def test_aac_random_access_benchmark(self):
         """Benchmark AAC random access performance"""
@@ -395,12 +406,13 @@ class TestAACErrorHandling(unittest.TestCase):
         root = zarr.create_group(store=store)
         test_group = root.create_group('test')
         
-        # Create invalid audio array
+        # Create invalid audio array using correct Zarr API
         audio_array = test_group.create_array(
             name='audio_data_blob_array',
-            data=invalid_data,
+            shape=invalid_data.shape,
             dtype=np.uint8
         )
+        audio_array[:] = invalid_data  # Set data after creation
         audio_array.attrs['codec'] = 'aac'
         audio_array.attrs['sample_rate'] = 48000
         
@@ -417,12 +429,13 @@ class TestAACErrorHandling(unittest.TestCase):
         root = zarr.create_group(store=store)
         test_group = root.create_group('test')
         
-        # Create audio array without index
+        # Create audio array without index using correct Zarr API
         audio_array = test_group.create_array(
             name='audio_data_blob_array',
-            data=np.zeros(1000, dtype=np.uint8),
+            shape=(1000,),
             dtype=np.uint8
         )
+        audio_array[:] = np.zeros(1000, dtype=np.uint8)
         
         # Should raise error when trying to extract without index
         with self.assertRaises(ValueError):

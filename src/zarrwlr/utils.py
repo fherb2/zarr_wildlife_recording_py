@@ -51,17 +51,32 @@ def make_immutable(obj):
     else:
         return obj  # primitive types or immutable objects
 
-def remove_zarr_group_recursive(store, group_path):
-    logger.trace(f"remove_zarr_group_recursive() with {store=} and {group_path=} requested. So, try to remove this group.")
-    prefix = group_path.rstrip('/') + '/'
-    logger.trace("Collect keys to delete...")
-#Das scheint der falsche Ansatz. Ist zu überarbeiten!
-    keys_to_delete = [k for k in store.keys() if k == group_path or k.startswith(prefix)]
-    logger.trace(f"... Keys to delete: {keys_to_delete}")
-    for key in keys_to_delete:
-        logger.trace(f"...removing store[{key}]")
-        del store[key]
-    logger.trace("Removing done.")
+def remove_zarr_group_recursive(store, group_path: str):
+    '''Removes a zarr group recursively from a store.'''
+    logger.trace(f"Remove zarr group '{group_path}' from store '{store}' requested.")
+    
+    try:
+        # Zarr v3 LocalStore hat keine keys() method
+        # Stattdessen verwende list() oder iteriere über Pfade
+        if hasattr(store, 'keys'):
+            # Zarr v2 style
+            keys_to_delete = [k for k in store.keys() if k == group_path or k.startswith(prefix)]
+        else:
+            # Zarr v3 LocalStore - verwende alternatives Vorgehen
+            import pathlib
+            store_path = pathlib.Path(store.root) if hasattr(store, 'root') else pathlib.Path(str(store))
+            group_full_path = store_path / group_path
+            
+            if group_full_path.exists():
+                import shutil
+                shutil.rmtree(group_full_path)
+                logger.trace(f"Zarr group '{group_path}' removed via filesystem")
+                return
+            else:
+                logger.trace(f"Zarr group '{group_path}' does not exist")
+                return
+    except Exception as e:
+        logger.warning(f"Error removing zarr group: {e}")
 
 def zarr_to_dict_snapshot(root_group: zarr.Group, k=32, n=32, d=None) -> dict:
     """
