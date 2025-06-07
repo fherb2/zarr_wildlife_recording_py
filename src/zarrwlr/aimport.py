@@ -4,6 +4,7 @@ import pathlib
 import hashlib
 import json
 import datetime
+import time
 import yaml
 import tempfile
 from mutagen import File as MutagenFile
@@ -26,36 +27,11 @@ from .flac_access import (  # noqa: E402
     parallel_extract_audio_segments_flac
 )
 
-# Opus functions - LAZY IMPORT to avoid circular imports
-import_opus_to_zarr = None
-extract_audio_segment_opus = None  
-parallel_extract_audio_segments_opus = None
-
-def _get_opus_functions():
-    """Lazy import of opus functions to avoid circular imports"""
-    global import_opus_to_zarr, extract_audio_segment_opus, parallel_extract_audio_segments_opus
-    
-    if import_opus_to_zarr is None:
-        try:
-            from .opus_access import (
-                import_opus_to_zarr as import_func,
-                extract_audio_segment_opus as extract_func, 
-                parallel_extract_audio_segments_opus as parallel_func
-            )
-            import_opus_to_zarr = import_func
-            extract_audio_segment_opus = extract_func
-            parallel_extract_audio_segments_opus = parallel_func
-            
-            logger.trace("Opus functions loaded successfully via lazy import")
-            
-        except ImportError as e:
-            logger.error(f"Could not import opus functions: {e}")
-            # Set dummy functions to avoid None errors
-            import_opus_to_zarr = lambda *args, **kwargs: None
-            extract_audio_segment_opus = lambda *args, **kwargs: None
-            parallel_extract_audio_segments_opus = lambda *args, **kwargs: None
-    
-    return import_opus_to_zarr, extract_audio_segment_opus, parallel_extract_audio_segments_opus
+from .aac_access import (
+    import_aac_to_zarr,
+    extract_audio_segment_aac, 
+    parallel_extract_audio_segments_aac
+)
 
 from .utils import next_numeric_group_name, remove_zarr_group_recursive, safe_int_conversion  # noqa: E402
 from .config import Config  # noqa: E402
@@ -520,7 +496,6 @@ def _get_source_params(input_file: pathlib.Path) -> dict:
     logger.trace("Reading done. Sort into the dictionary 'source_params'...")
     source_params = {
                 "sampling_rate": int(info['streams'][0]['sample_rate']) if 'sample_rate' in info['streams'][0] else None,
-                "is_opus": info['streams'][0]['codec_name'] == "opus",
                 "sample_format": info['streams'][0]['sample_fmt'] if 'sample_fmt' in info['streams'][0] else "s16",
                 "bit_rate": int(info['streams'][0]['bit_rate']) if 'bit_rate' in info['streams'][0] else None,
                 "nb_channels": int(info['streams'][0]['channels']) if 'channels' in info['streams'][0] else 1
@@ -528,44 +503,44 @@ def _get_source_params(input_file: pathlib.Path) -> dict:
     logger.debug(f"Read parameters in 'source_params' are: {source_params}")
     return source_params
 
-def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
-    """
-    Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
+# def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
+#     """
+#     Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
     
-    Args:
-        source_sample_fmt: Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
-        target_codec: "flac" oder "opus"
+#     Args:
+#         source_sample_fmt: Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
+#         target_codec: "flac" oder "opus"
     
-    Returns:
-        str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
-    """
-    logger.trace(f"Get ffmpeg sample format requested. Given source format: {source_sample_fmt} and target codec: {target_codec}")
-    # Mappings nach Fähigkeiten der Codecs
-    flac_supported = ["s8", "s12", "s16", "s24", "s32"]
-    opus_supported = ["s16", "s24", "flt"]
+#     Returns:
+#         str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
+#     """
+#     logger.trace(f"Get ffmpeg sample format requested. Given source format: {source_sample_fmt} and target codec: {target_codec}")
+#     # Mappings nach Fähigkeiten der Codecs
+#     flac_supported = ["s8", "s12", "s16", "s24", "s32"]
+#     opus_supported = ["s16", "s24", "flt"]
 
-    # Auflösen von planar zu packed
-    normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
-    logger.trace(f"Normalized source sample format: {normalized_fmt}")
+#     # Auflösen von planar zu packed
+#     normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
+#     logger.trace(f"Normalized source sample format: {normalized_fmt}")
 
-    if target_codec == "flac":
-        if normalized_fmt in flac_supported:
-            retval = normalized_fmt
-        else:
-            # fallback
-            retval = "s32"
-    elif target_codec == "opus":
-        # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
-        if normalized_fmt in opus_supported:
-            retval = normalized_fmt
-        # fallback auf float oder s16
-        else:
-            retval =  "flt" if normalized_fmt.startswith("f") else "s16"
-    else:
-        logger.error(f"Could not find any convertion value for '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
-        raise NotImplementedError(f"Unsupported codec: {target_codec}")
-    logger.debug(f"Found the sample format '{retval}' as convertion from '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
-    return retval
+#     if target_codec == "flac":
+#         if normalized_fmt in flac_supported:
+#             retval = normalized_fmt
+#         else:
+#             # fallback
+#             retval = "s32"
+#     elif target_codec == "opus":
+#         # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
+#         if normalized_fmt in opus_supported:
+#             retval = normalized_fmt
+#         # fallback auf float oder s16
+#         else:
+#             retval =  "flt" if normalized_fmt.startswith("f") else "s16"
+#     else:
+#         logger.error(f"Could not find any convertion value for '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
+#         raise NotImplementedError(f"Unsupported codec: {target_codec}")
+#     logger.debug(f"Found the sample format '{retval}' as convertion from '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
+#     return retval
 
 
 def import_original_audio_file(
@@ -573,9 +548,9 @@ def import_original_audio_file(
                     zarr_original_audio_group: zarr.Group,
                     first_sample_time_stamp: datetime.datetime|None,
                     last_sample_time_stamp: datetime.datetime|None = None,
-                    target_codec:str = 'flac', # 'flac' or 'opus'
-                    flac_compression_level: int = 4, # 0...12; 4 ist ein guter Kompromiss
-                    opus_bitrate:int = 160_000, # bit per second
+                    target_codec:str = 'flac', # 'flac' or 'aac' 
+                    flac_compression_level: int = 4,
+                    aac_bitrate:int = 160_000,  # <-- NEU
                     temp_dir="/tmp",
                     chunk_size:int = Config.original_audio_chunk_size
                     ):
@@ -585,7 +560,6 @@ def import_original_audio_file(
     SIMPLIFIED VERSION (Step 1.3): 
     Codec-specific logic has been moved to dedicated modules:
     - FLAC: flac_access.import_flac_to_zarr()
-    - Opus: opus_access.import_opus_to_zarr()
     
     This function now serves as a clean orchestrator.
     
@@ -594,9 +568,8 @@ def import_original_audio_file(
         zarr_original_audio_group: Zarr-Gruppe für Original-Audiodateien
         first_sample_time_stamp: Zeitstempel des ersten Samples
         last_sample_time_stamp: Zeitstempel des letzten Samples (optional)
-        target_codec: Zielcodec ('flac' oder 'opus')
+        target_codec: Zielcodec ('flac' oder 'aac')
         flac_compression_level: Kompressionsgrad für FLAC (0-12)
-        opus_bitrate: Bitrate für Opus (bit/s)
         temp_dir: Verzeichnis für temporäre Dateien
         chunk_size: Chunk-Größe für das Zarr-Array
     
@@ -605,8 +578,8 @@ def import_original_audio_file(
         ValueError: Wenn die Datei keinen Audio-Stream enthält
         NotImplementedError: Wenn die Datei mehr als einen Audio-Stream enthält
     """
-    logger.trace(f"Import of the audio file '{str(audio_file)}' is requested. Given parameter are: {zarr_original_audio_group=}; {first_sample_time_stamp=}; {last_sample_time_stamp=}; {target_codec=}; {flac_compression_level=}; {opus_bitrate=}; {temp_dir=}; {chunk_size}")
-    assert target_codec in ('flac', 'opus'), f"For audio import only 'flac' and 'opus' are allowed target codecs, not '{target_codec}'."
+    logger.trace(f"Import of audio file '{str(audio_file)}' requested with target_codec='{target_codec}'")
+    assert target_codec in ('flac', 'aac'), f"Supported codecs: 'flac', 'aac', not '{target_codec}'"
     assert (flac_compression_level >= 0) and (flac_compression_level <= 12), f"The 'flac' compression level must be in the range of 0...12, not {flac_compression_level}."
     assert zarr_original_audio_group is not None, f"Parameter 'zarr_original_audio_group' may not be None."
 
@@ -686,28 +659,23 @@ def import_original_audio_file(
             )
             logger.trace("FLAC import completed via flac_access module.")
             
-        elif target_codec == 'opus':
-            # Use Opus access module (NEW - Step 1.3) - LAZY IMPORT
-            logger.trace("Target codec is 'opus'. Using opus_access module for import...")
-            
-            # Get opus functions via lazy import
-            opus_import_func, _, _ = _get_opus_functions()
-            
-            if opus_import_func is None:
-                raise RuntimeError("Opus functions not available - check opus_access module")
-            
-            audio_blob_array = opus_import_func(
+        elif target_codec == 'aac':
+            # Use AAC access module (NEW)
+            logger.trace("Target codec is 'aac'. Using aac_access module for import...")
+            audio_blob_array = import_aac_to_zarr(
                 zarr_group=new_original_audio_grp,
                 audio_file=audio_file,
                 source_params=source_params,
                 first_sample_time_stamp=first_sample_time_stamp,
-                opus_bitrate=opus_bitrate,
+                aac_bitrate=aac_bitrate,
                 temp_dir=temp_dir
             )
-            logger.trace("Opus import completed via opus_access module.")
+            logger.trace("AAC import completed via aac_access module.")
             
         else:
             raise ValueError(f"Unsupported target codec: {target_codec}")
+
+
 
     except Exception as err:
         logger.error(f"An error happens during importing audio file. Error: {err}")
@@ -720,13 +688,90 @@ def import_original_audio_file(
     
     logger.success(f"Audio data from file '{audio_file.name}' completely imported into Zarr group '{new_audio_group_name}' in '{str(zarr_original_audio_group.store_path)}'. Index for 'random access read' created.")
 
+# Erweitere import_original_audio_file() um Config-Integration:
+def import_original_audio_file_with_config(
+                    audio_file: str|pathlib.Path, 
+                    zarr_original_audio_group: zarr.Group,
+                    first_sample_time_stamp: datetime.datetime|None,
+                    target_codec:str = None,  # None = use Config default
+                    **kwargs):
+    """
+    Enhanced import with automatic config integration
+    """
+    # Use config defaults if not specified
+    if target_codec is None:
+        target_codec = 'aac'  # New default
+    
+    # Get AAC config if using AAC
+    if target_codec == 'aac':
+        aac_config = _get_aac_config_for_import()
+        if 'aac_bitrate' not in kwargs:
+            kwargs['aac_bitrate'] = aac_config['bitrate']
+    
+    # Call original function with enhanced parameters
+    return import_original_audio_file(
+        audio_file=audio_file,
+        zarr_original_audio_group=zarr_original_audio_group,
+        first_sample_time_stamp=first_sample_time_stamp,
+        target_codec=target_codec,
+        **kwargs
+    )
+
+def validate_aac_import_parameters(aac_bitrate: int, source_params: dict) -> dict:
+    """
+    Validate and optimize AAC import parameters
+    
+    Args:
+        aac_bitrate: Requested bitrate
+        source_params: Source audio parameters
+        
+    Returns:
+        Validated and optimized parameters
+    """
+    from .config import Config
+    
+    # Validate bitrate range
+    min_bitrate = 32000
+    max_bitrate = 320000
+    
+    if aac_bitrate < min_bitrate:
+        logger.warning(f"AAC bitrate {aac_bitrate} too low, using minimum {min_bitrate}")
+        aac_bitrate = min_bitrate
+    elif aac_bitrate > max_bitrate:
+        logger.warning(f"AAC bitrate {aac_bitrate} too high, using maximum {max_bitrate}")
+        aac_bitrate = max_bitrate
+    
+    # Optimize bitrate based on channels
+    channels = source_params.get("nb_channels", 2)
+    if channels == 1:  # Mono
+        recommended_max = 128000
+        if aac_bitrate > recommended_max:
+            logger.info(f"Reducing AAC bitrate from {aac_bitrate} to {recommended_max} for mono audio")
+            aac_bitrate = recommended_max
+    
+    # Check sample rate compatibility
+    sample_rate = source_params.get("sampling_rate", 48000)
+    supported_rates = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000]
+    
+    if sample_rate not in supported_rates:
+        closest_rate = min(supported_rates, key=lambda x: abs(x - sample_rate))
+        logger.warning(f"Sample rate {sample_rate}Hz not optimal for AAC, closest supported: {closest_rate}Hz")
+    
+    return {
+        'validated_bitrate': aac_bitrate,
+        'channels': channels,
+        'sample_rate': sample_rate,
+        'use_pyav': Config.aac_enable_pyav_native,
+        'fallback_ffmpeg': Config.aac_fallback_to_ffmpeg
+    }
+
+
 
 def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
     """
     Extrahiert ein Audiosegment aus einer Zarr-Gruppe, unabhängig vom verwendeten Codec.
     
-    SIMPLIFIED VERSION (Step 1.3): 
-    Uses dedicated codec modules for extraction with format auto-detection.
+    ENHANCED VERSION (Step 2.0): Added AAC-LC support with format auto-detection.
     
     Args:
         zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
@@ -736,105 +781,106 @@ def extract_audio_segment(zarr_group, start_sample, end_sample, dtype=np.int16):
         
     Returns:
         np.ndarray: Extrahiertes Audiosegment
-        
-    Raises:
-        ValueError: Wenn der Codec nicht unterstützt wird
-    """
-    # Auto-detect format and codec
-    has_packet_format = (
-        "opus_packets_blob" in zarr_group and
-        "opus_packet_index" in zarr_group
-    )
+    """  
+    if AUDIO_DATA_BLOB_ARRAY_NAME not in zarr_group:
+        raise ValueError("No audio data found in zarr_group")
     
-    has_legacy_format = AUDIO_DATA_BLOB_ARRAY_NAME in zarr_group
-    
-    if has_packet_format:
-        # NEW: Packet-based format - get codec from packet index
-        packet_index = zarr_group["opus_packet_index"]
-        codec = packet_index.attrs.get('codec', 'opus')  # Assume opus for packet format
-        audio_blob_array = None  # Not needed for packet-based
-        
-    elif has_legacy_format:
-        # Legacy format - get codec from audio blob
-        audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-        codec = audio_blob_array.attrs.get('codec', 'unknown')
-        
-    else:
-        raise ValueError("No supported audio format found in zarr_group")
-    
+    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
+    codec = audio_blob_array.attrs.get('codec', 'unknown')
+
     if codec == 'flac':
-        if audio_blob_array is None:
-            raise ValueError("FLAC requires legacy audio_data_blob_array format")
         return extract_audio_segment_flac(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
-        
-    elif codec == 'opus':
-        # Lazy import of opus extraction function
-        _, opus_extract_func, _ = _get_opus_functions()
-        
-        if opus_extract_func is None:
-            raise RuntimeError("Opus extraction function not available")
-            
-        return opus_extract_func(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
-        
+    elif codec == 'aac':
+        return extract_audio_segment_aac(zarr_group, audio_blob_array, start_sample, end_sample, dtype)
     else:
-        raise ValueError(f"Nicht unterstützter Codec: {codec}")
+        raise ValueError(f"Unsupported codec: {codec}")
 
 
 def parallel_extract_audio_segments(zarr_group, segments, dtype=np.int16, max_workers=4):
     """
     Extrahiert mehrere Audiosegmente parallel aus einer Zarr-Gruppe.
     
-    SIMPLIFIED VERSION (Step 1.3): 
-    Uses dedicated codec modules for parallel extraction with format auto-detection.
-    
-    Args:
-        zarr_group: Zarr-Gruppe mit den Audiodaten und dem Index
-        segments: Liste von (start_sample, end_sample)-Tupeln
-        dtype: Datentyp der Ausgabe (np.int16 oder np.float32)
-        max_workers: Maximale Anzahl paralleler Worker
-        
-    Returns:
-        Liste von np.ndarray: Extrahierte Audiosegmente
-    """
-    # Auto-detect format and codec (same logic as single extraction)
-    has_packet_format = (
-        "opus_packets_blob" in zarr_group and
-        "opus_packet_index" in zarr_group
-    )
-    
-    has_legacy_format = AUDIO_DATA_BLOB_ARRAY_NAME in zarr_group
-    
-    if has_packet_format:
-        # NEW: Packet-based format
-        packet_index = zarr_group["opus_packet_index"]
-        codec = packet_index.attrs.get('codec', 'opus')
-        audio_blob_array = None  # Not needed for packet-based
-        
-    elif has_legacy_format:
-        # Legacy format
-        audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
-        codec = audio_blob_array.attrs.get('codec', 'unknown')
-        
-    else:
-        raise ValueError("No supported audio format found in zarr_group")
+    ENHANCED VERSION (Step 2.0): Added AAC-LC support with format auto-detection.
+    """  
+    if AUDIO_DATA_BLOB_ARRAY_NAME not in zarr_group:
+        raise ValueError("No audio data found in zarr_group")
+
+    audio_blob_array = zarr_group[AUDIO_DATA_BLOB_ARRAY_NAME]
+    codec = audio_blob_array.attrs.get('codec', 'unknown')
     
     if codec == 'flac':
         if audio_blob_array is None:
             raise ValueError("FLAC requires legacy audio_data_blob_array format")
         return parallel_extract_audio_segments_flac(zarr_group, audio_blob_array, segments, dtype, max_workers)
         
-    elif codec == 'opus':
-        # Lazy import of opus parallel extraction function
-        _, _, opus_parallel_func = _get_opus_functions()
-        
-        if opus_parallel_func is None:
-            raise RuntimeError("Opus parallel extraction function not available")
-            
-        return opus_parallel_func(zarr_group, audio_blob_array, segments, dtype, max_workers)
-        
+    elif codec == 'aac':
+        if audio_blob_array is None:
+            raise ValueError("AAC requires legacy audio_data_blob_array format")
+        return parallel_extract_audio_segments_aac(zarr_group, audio_blob_array, segments, dtype, max_workers)
     else:
         raise ValueError(f"Nicht unterstützter Codec: {codec}")
+
+   
+def _get_aac_config_for_import():
+    """Get AAC configuration parameters for import operations"""
+    from .config import Config
+    return {
+        'bitrate': Config.aac_default_bitrate,
+        'use_pyav': Config.aac_enable_pyav_native,
+        'fallback_ffmpeg': Config.aac_fallback_to_ffmpeg,
+        'quality_preset': Config.aac_quality_preset,
+        'memory_limit': Config.aac_memory_limit_mb
+    }
+
+
+def _log_import_performance(start_time: float, audio_file: pathlib.Path, 
+                           target_codec: str, **stats):
+    """Log performance metrics for import operations"""
+    import_time = time.time() - start_time
+    file_size_mb = audio_file.stat().st_size / 1024 / 1024
     
+    logger.success(
+        f"{target_codec.upper()} import completed: "
+        f"{audio_file.name} ({file_size_mb:.1f}MB) in {import_time:.2f}s "
+        f"({file_size_mb/import_time:.1f} MB/s)"
+    )
+    
+    if 'compression_ratio' in stats:
+        logger.info(f"Compression achieved: {stats['compression_ratio']:.1f}x reduction")
+
+def test_aac_integration():
+    """
+    Quick integration test for AAC functionality
+    This can be called during development to verify AAC integration
+    """
+    try:
+        from .config import Config
+        from .aac_access import import_aac_to_zarr
+        from .aac_index_backend import build_aac_index
+        
+        logger.info("AAC integration test started...")
+        
+        # Test configuration
+        original_bitrate = Config.aac_default_bitrate
+        Config.set(aac_default_bitrate=128000)
+        assert Config.aac_default_bitrate == 128000
+        Config.set(aac_default_bitrate=original_bitrate)
+        
+        logger.success("AAC configuration test passed")
+        
+        # Test imports
+        assert import_aac_to_zarr is not None
+        assert build_aac_index is not None
+        
+        logger.success("AAC module imports test passed")
+        logger.success("AAC integration test completed successfully")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"AAC integration test failed: {e}")
+        return False
+
 
 logger.debug("Module loaded.")
 # We do this check during import:

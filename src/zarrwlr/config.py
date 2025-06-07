@@ -166,6 +166,15 @@ class Config:
                             "terminal_log_max_line_length",
                             "original_audio_chunk_size",
                             "original_audio_chunks_per_shard",
+                            "aac_default_bitrate",
+                            "aac_enable_pyav_native", 
+                            "aac_fallback_to_ffmpeg",
+                            "aac_frame_analysis_method",
+                            "aac_index_chunk_size",
+                            "aac_max_workers",
+                            "aac_enable_parallel_analysis",
+                            "aac_memory_limit_mb",
+                            "aac_quality_preset"
                          ]
     
     log_level: LogLevel = LogLevel.ERROR    # Global logging level (acts as upper bound)
@@ -176,6 +185,16 @@ class Config:
     terminal_log_max_line_length: int|None = 120  # Maximum line length for terminal output (None = no wrapping)
     original_audio_chunk_size = 1024 * 1024  # 1MB
     original_audio_chunks_per_shard = 4      # 4 chunks per shard
+    aac_default_bitrate: int = 160000              # Default AAC bitrate in bits/second (160 kbps)
+    aac_enable_pyav_native: bool = True             # Use PyAV for native AAC processing (faster)
+    aac_fallback_to_ffmpeg: bool = True             # Fall back to ffmpeg if PyAV fails
+    aac_frame_analysis_method: str = "pyav"         # Frame analysis method: "pyav" or "manual"
+    aac_index_chunk_size: int = 1000               # Frames per index chunk in Zarr
+    aac_max_workers: int = 4                       # Maximum workers for parallel processing
+    aac_enable_parallel_analysis: bool = True      # Enable parallel frame analysis
+    aac_memory_limit_mb: int = 500                 # Memory limit for AAC processing in MB
+    aac_quality_preset: str = "balanced"           # Quality preset: "fast", "balanced", "quality"
+
     
     # immutable keys  (can not be changed during runtime; only changeable at this position)
     # --------------  
@@ -584,6 +603,24 @@ class Config:
                             raise TypeError(f"Expected {key} to be int or None, got {type(value).__name__}")
                         if value is not None and value <= 0:
                             raise ValueError(f"Expected {key} to be positive integer or None, got {value}")
+
+                    elif key.startswith("aac_"):
+                        if key == "aac_default_bitrate":
+                            if not isinstance(value, int) or value < 32000 or value > 320000:
+                                raise ValueError(f"AAC bitrate must be between 32000 and 320000 bps, got {value}")
+                        elif key == "aac_frame_analysis_method":
+                            if value not in ["pyav", "manual"]:
+                                raise ValueError(f"AAC frame analysis method must be 'pyav' or 'manual', got {value}")
+                        elif key == "aac_quality_preset":
+                            if value not in ["fast", "balanced", "quality"]:
+                                raise ValueError(f"AAC quality preset must be 'fast', 'balanced', or 'quality', got {value}")
+                        elif key == "aac_memory_limit_mb":
+                            if not isinstance(value, int) or value < 100:
+                                raise ValueError(f"AAC memory limit must be at least 100 MB, got {value}")
+                        elif key == "aac_max_workers":
+                            if not isinstance(value, int) or value < 1 or value > 16:
+                                raise ValueError(f"AAC max workers must be between 1 and 16, got {value}")
+
                     else:
                         expected_type = get_type_hints(cls).get(key)
                         if expected_type and not isinstance(value, expected_type):
