@@ -262,10 +262,14 @@ def extract_audio_segment_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Arr
             
             for packet in container.demux(audio_stream):
                 for frame in packet.decode():
-                    # Use PyAV to_ndarray() - correct API without dtype
-                    frame_array = frame.to_ndarray(format='s16')
+                    # FIXED: Use PyAV to_ndarray() without format parameter
+                    try:
+                        frame_array = frame.to_ndarray()  # ✅ CORRECT API
+                    except Exception as e:
+                        logger.error(f"PyAV to_ndarray failed: {e}")
+                        continue
                     
-                    # Convert to target dtype manually
+                    # Convert to target dtype manually if needed
                     if frame_array.dtype != dtype:
                         if dtype == np.int16:
                             if frame_array.dtype.kind == 'f':  # floating point
@@ -278,7 +282,10 @@ def extract_audio_segment_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Arr
                             else:
                                 frame_array = frame_array.astype(np.int32)
                         elif dtype == np.float32:
-                            frame_array = frame_array.astype(np.float32)
+                            if frame_array.dtype.kind == 'f':
+                                frame_array = frame_array.astype(np.float32)
+                            else:
+                                frame_array = (frame_array.astype(np.float32) / 32767.0)
                         else:
                             frame_array = frame_array.astype(dtype)
                     
@@ -310,7 +317,7 @@ def extract_audio_segment_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Arr
                 logger.trace(f"Extracted {result.shape[0]} samples from {len(decoded_samples)} frames")
                 return result
             else:
-                logger.warning("No samples decoded")
+                logger.warning("No samples decoded - PyAV decoding failed")
                 return np.array([], dtype=dtype)
                 
         finally:
@@ -321,7 +328,7 @@ def extract_audio_segment_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Arr
     except Exception as e:
         logger.error(f"Error extracting AAC segment [{start_sample}:{end_sample}]: {e}")
         return np.array([], dtype=dtype)
-
+    
 
 def parallel_extract_audio_segments_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Array, 
                                         segments: List[Tuple[int, int]], dtype=np.int16, 

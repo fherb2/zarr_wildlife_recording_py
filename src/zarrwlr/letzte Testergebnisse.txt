@@ -1,0 +1,483 @@
+pytest test_aac_3col_priorities.py -v -s
+=================================================== test session starts ===================================================
+platform linux -- Python 3.11.12, pytest-8.3.5, pluggy-1.6.0 -- /home/jovyan/.venv3.11/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace
+configfile: pyproject.toml
+collecting ... Universal JSON serialization enabled globally!
+collected 10 items                                                                                                        
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority1_pyav_extraction_basic 
+🎯 Setting up AAC 3-Column Index Priority Test Environment
+📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:26:34.459 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+2025-06-08 01:26:50.608 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.389s
+2025-06-08 01:26:50.608 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:26:50.618 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:26:50.628 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 1: Testing PyAV extraction with 3-column index
+📊 Audio info: 48000Hz, 171259 frames, 175369216 samples
+🔍 Testing extraction: samples [0:4410]
+✅ Basic extraction successful:
+   Extracted: 4411 samples
+   Time: 381.12ms
+   Data type: int16
+   Data range: [-11113, 12315]
+🔍 Testing middle extraction: samples [87684608:87686813]
+✅ Middle extraction: 2206 samples in 416.14ms
+PASSED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority1_pyav_extraction_edge_cases 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:26:51.510 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:27:07.504 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.384s
+2025-06-08 01:27:07.505 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:27:07.515 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:27:07.523 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 1: Testing PyAV extraction edge cases
+🔍 Testing single sample extraction
+✅ Single sample: 1 samples extracted
+🔍 Testing extraction near end of file
+FAILED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority1_different_dtypes 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:27:08.299 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:27:24.282 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.380s
+2025-06-08 01:27:24.282 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:27:24.294 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:27:24.302 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 1: Testing different output data types
+🔍 Testing dtype: <class 'numpy.int16'>
+✅ <class 'numpy.int16'>: 4001 samples, range [-11113.00, 12315.00]
+🔍 Testing dtype: <class 'numpy.int32'>
+✅ <class 'numpy.int32'>: 4001 samples, range [-728378880.00, 807107584.00]
+🔍 Testing dtype: <class 'numpy.float32'>
+✅ <class 'numpy.float32'>: 4001 samples, range [-0.34, 0.38]
+PASSED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority2_random_access_performance 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:27:25.517 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+2025-06-08 01:27:41.451 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.370s
+2025-06-08 01:27:41.451 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:27:41.464 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:27:41.472 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 2: Measuring random access performance
+📊 Performance test setup: 175369216 total samples, 171259 frames
+🔍 Running 50 random extractions...
+📈 Performance Results:
+   Total tests: 50
+   Successful: 50
+   Success rate: 100.0%
+   Total time: 19.980s
+   Extraction times (ms):
+     Min:    297.84ms
+     Max:    555.73ms
+     Mean:   399.60ms
+     Median: 399.76ms
+     Std:    57.39ms
+FAILED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority2_index_lookup_performance 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:28:01.567 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:28:17.685 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.388s
+2025-06-08 01:28:17.685 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:28:17.696 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:28:17.706 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 2: Testing 3-column index lookup performance
+🔍 Testing 1000 index lookups...
+📈 Index Lookup Performance:
+   Lookups tested: 1000
+   Min time: 49749.85μs
+   Max time: 68223.24μs
+   Mean time: 51883.69μs
+FAILED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority2_parallel_extraction_performance 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:29:09.731 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:29:26.344 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.383s
+2025-06-08 01:29:26.344 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:29:26.357 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:29:26.365 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 2: Testing parallel extraction performance
+🔍 Comparing sequential vs parallel extraction (20 segments)
+📈 Parallel Performance:
+   Sequential time: 8.460s
+   Parallel time: 7.251s
+   Speedup: 1.17x
+✅ Parallel extraction performance validated
+PASSED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority3_overlap_handling_accuracy 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:29:42.175 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:30:00.349 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.580s
+2025-06-08 01:30:00.349 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:30:00.361 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:30:00.370 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 3: Validating overlap handling accuracy
+🔍 Testing overlapping extractions for consistency
+   Segment A: 3001 samples
+   Segment B: 3001 samples
+   Segment C: 3001 samples
+   Overlap correlation: -0.5260
+FAILED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority3_frame_boundary_handling 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:30:01.664 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:30:19.340 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.384s
+2025-06-08 01:30:19.340 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:30:19.354 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:30:19.365 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 3: Testing frame boundary overlap handling
+🔍 Testing extractions at frame boundaries
+   Testing frame 0 boundary: sample 0
+     Frame 0: 513 samples in 308.92ms
+   Testing frame 1 boundary: sample 1024
+     Frame 1: 513 samples in 266.28ms
+   Testing frame 2 boundary: sample 2048
+     Frame 2: 513 samples in 281.42ms
+   Testing frame 3 boundary: sample 3072
+     Frame 3: 513 samples in 274.24ms
+   Testing frame 4 boundary: sample 4096
+     Frame 4: 513 samples in 294.93ms
+✅ Frame boundary handling validated
+PASSED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority3_overlap_frame_calculation 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:30:20.961 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:30:38.667 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.446s
+2025-06-08 01:30:38.667 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:30:38.679 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:30:38.688 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 3: Testing overlap frame calculation
+🔍 Testing *find*frame_range_for_samples with overlap
+   Request: samples [3584:4608]
+   Frame 3 starts at: 3072
+   Frame 4 starts at: 4096
+   Frame range: [2:5]
+   Start frame sample pos: 2048
+   End frame sample pos: 5120
+✅ Overlap frame calculation correct
+PASSED
+test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority3_sample_accuracy_with_overlap 📁 Found 4 test files: ['audiomoth_long_snippet.wav', 'audiomoth_short_snippet.wav', 'bird1_snippet.mp3', 'camtrap_snippet.mov']
+📥 Importing test file: audiomoth_long_snippet.wav (350735072 bytes)
+2025-06-08 01:30:38.912 | DEBUG    | aimport:156          | Audio compression of pcm_s16le checked. Is: uncompressed.
+
+
+
+2025-06-08 01:30:57.378 | SUCCESS  | aac_index_backend | OPTIMIZED AAC index created: 171259 frames in 0.518s
+2025-06-08 01:30:57.378 | SUCCESS  | aac_index_backend | Index size reduction: 4110216 bytes (50.0% smaller)
+2025-06-08 01:30:57.391 | SUCCESS  | aac_access      | AAC import completed successfully for
+                                                       'audiomoth_long_snippet.wav' with 3-column index optimization
+2025-06-08 01:30:57.400 | SUCCESS  | aimport         | Audio data from file 'audiomoth_long_snippet.wav' completely
+                                                       imported into Zarr group '0' in 'file:///workspace/tests/testresu
+                                                       lts/aac_3col_priorities/aac_priorities_store/audio_imports'.
+                                                       Index for 'random access read' created.
+✅ Import completed: 171259 frames, 3-column index
+🎯 Priority 3: Testing sample accuracy with overlap handling
+🔍 Testing precise sample extraction with overlap
+   Testing precise range: [1000:1999]
+     Expected: 1000 samples
+     Actual: 1000 samples
+     Difference: 0 samples
+   Testing precise range: [5000:5499]
+     Expected: 500 samples
+     Actual: 500 samples
+     Difference: 0 samples
+   Testing precise range: [10000:10099]
+     Expected: 100 samples
+     Actual: 100 samples
+     Difference: 0 samples
+✅ Sample accuracy with overlap validated
+PASSED
+======================================================== FAILURES =========================================================
+___________________________ TestAAC_3ColumnPriorities.test_priority1_pyav_extraction_edge_cases ___________________________
+self = <tests.test_aac_3col_priorities.TestAAC_3ColumnPriorities object at 0x770d99975750>
+imported_aac_data = {'aac_index': <Array file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0/aac_...'), 'zarr_group': <Group file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0>}
+    def test_priority1_pyav_extraction_edge_cases(self, imported_aac_data):
+        """Priority 1: Test PyAV extraction edge cases with 3-column index"""
+        print("\n🎯 Priority 1: Testing PyAV extraction edge cases")
+    
+        zarr_group = imported_aac_data['zarr_group']
+        audio_array = imported_aac_data['audio_array']
+        aac_index = imported_aac_data['aac_index']
+        total_samples = aac_index.attrs['total_samples']
+    
+        # Test very small extraction (single sample)
+        print("🔍 Testing single sample extraction")
+        single_sample = extract_audio_segment_aac(
+            zarr_group, audio_array, 1000, 1000
+        )
+        assert len(single_sample) >= 1, "Single sample extraction failed"
+        print(f"✅ Single sample: {len(single_sample)} samples extracted")
+    
+        # Test extraction near end
+        print("🔍 Testing extraction near end of file")
+        end_start = max(0, total_samples - 1024)
+        end_end = total_samples - 1
+    
+        end_audio = extract_audio_segment_aac(
+            zarr_group, audio_array, end_start, end_end
+        )
+>       assert len(end_audio) > 0, "End extraction failed"
+E       AssertionError: End extraction failed
+E       assert 0 > 0
+E        +  where 0 = len(array([], shape=(0, 1024), dtype=int16))
+test_aac_3col_priorities.py:238: AssertionError
+___________________________ TestAAC_3ColumnPriorities.test_priority2_random_access_performance ____________________________
+self = <tests.test_aac_3col_priorities.TestAAC_3ColumnPriorities object at 0x770d999765d0>
+imported_aac_data = {'aac_index': <Array file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0/aac_...'), 'zarr_group': <Group file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0>}
+    def test_priority2_random_access_performance(self, imported_aac_data):
+        """Priority 2: Measure random access performance with 3-column index"""
+        print("\n🎯 Priority 2: Measuring random access performance")
+    
+        zarr_group = imported_aac_data['zarr_group']
+        audio_array = imported_aac_data['audio_array']
+        aac_index = imported_aac_data['aac_index']
+        total_samples = aac_index.attrs['total_samples']
+    
+        print(f"📊 Performance test setup: {total_samples} total samples, {aac_index.shape[0]} frames")
+    
+        # Generate random extraction points
+        num_tests = 50
+        segment_length = 2205  # ~50ms at 44.1kHz
+    
+        np.random.seed(42)  # Reproducible results
+        test_segments = []
+    
+        for * in range(num*tests):
+            start = np.random.randint(0, max(1, total_samples - segment_length))
+            end = min(start + segment_length, total_samples - 1)
+            test_segments.append((start, end))
+    
+        print(f"🔍 Running {num_tests} random extractions...")
+    
+        # Measure extraction times
+        extraction_times = []
+        successful_extractions = 0
+    
+        overall_start = time.time()
+    
+        for i, (start_sample, end_sample) in enumerate(test_segments):
+            start_time = time.time()
+    
+            try:
+                audio_data = extract_audio_segment_aac(
+                    zarr_group, audio_array, start_sample, end_sample
+                )
+    
+                extraction_time = time.time() - start_time
+    
+                if len(audio_data) > 0:
+                    extraction_times.append(extraction_time)
+                    successful_extractions += 1
+    
+            except Exception as e:
+                print(f"⚠️ Extraction {i} failed: {e}")
+    
+        total_time = time.time() - overall_start
+    
+        # Calculate statistics
+        if extraction_times:
+            min_time = min(extraction_times) * 1000
+            max_time = max(extraction_times) * 1000
+            mean_time = statistics.mean(extraction_times) * 1000
+            median_time = statistics.median(extraction_times) * 1000
+            std_time = statistics.stdev(extraction_times) * 1000 if len(extraction_times) > 1 else 0
+    
+            print(f"\n📈 Performance Results:")
+            print(f"   Total tests: {num_tests}")
+            print(f"   Successful: {successful_extractions}")
+            print(f"   Success rate: {successful_extractions/num_tests*100:.1f}%")
+            print(f"   Total time: {total_time:.3f}s")
+            print(f"   Extraction times (ms):")
+            print(f"     Min:    {min_time:.2f}ms")
+            print(f"     Max:    {max_time:.2f}ms")
+            print(f"     Mean:   {mean_time:.2f}ms")
+            print(f"     Median: {median_time:.2f}ms")
+            print(f"     Std:    {std_time:.2f}ms")
+    
+            # Performance targets validation
+            target_max_time = 25.0  # 25ms target
+>           assert mean_time <= target_max_time, f"Mean extraction time {mean_time:.2f}ms exceeds target {target_max_time}ms"
+E           AssertionError: Mean extraction time 399.60ms exceeds target 25.0ms
+E           assert 399.60046768188477 <= 25.0
+test_aac_3col_priorities.py:357: AssertionError
+____________________________ TestAAC_3ColumnPriorities.test_priority2_index_lookup_performance ____________________________
+self = <tests.test_aac_3col_priorities.TestAAC_3ColumnPriorities object at 0x770d99976d10>
+imported_aac_data = {'aac_index': <Array file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0/aac_...'), 'zarr_group': <Group file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0>}
+    def test_priority2_index_lookup_performance(self, imported_aac_data):
+        """Priority 2: Measure 3-column index lookup performance specifically"""
+        print("\n🎯 Priority 2: Testing 3-column index lookup performance")
+    
+        zarr_group = imported_aac_data['zarr_group']
+        aac_index = imported_aac_data['aac_index']
+        total_samples = aac_index.attrs['total_samples']
+    
+        # Test index lookup speed
+        num_lookups = 1000
+        np.random.seed(42)
+    
+        lookup_times = []
+    
+        print(f"🔍 Testing {num_lookups} index lookups...")
+    
+        for * in range(num*lookups):
+            start_sample = np.random.randint(0, max(1, total_samples - 1000))
+            end_sample = start_sample + 1000
+    
+            start_time = time.time()
+            start_idx, end_idx = *find*frame_range_for_samples(aac_index, start_sample, end_sample)
+            lookup_time = time.time() - start_time
+    
+            lookup_times.append(lookup_time)
+    
+            # Validate lookup results
+            assert 0 <= start_idx < aac_index.shape[0], f"Invalid start_idx: {start_idx}"
+            assert 0 <= end_idx < aac_index.shape[0], f"Invalid end_idx: {end_idx}"
+            assert start_idx <= end_idx, f"start_idx > end_idx: {start_idx} > {end_idx}"
+    
+        # Calculate lookup statistics
+        min_lookup = min(lookup_times) * 1000000  # microseconds
+        max_lookup = max(lookup_times) * 1000000
+        mean_lookup = statistics.mean(lookup_times) * 1000000
+    
+        print(f"📈 Index Lookup Performance:")
+        print(f"   Lookups tested: {num_lookups}")
+        print(f"   Min time: {min_lookup:.2f}μs")
+        print(f"   Max time: {max_lookup:.2f}μs")
+        print(f"   Mean time: {mean_lookup:.2f}μs")
+    
+        # Validate O(log n) performance
+        target_max_lookup = 100.0  # 100μs should be more than enough for O(log n)
+>       assert mean_lookup <= target_max_lookup, f"Index lookup too slow: {mean_lookup:.2f}μs > {target_max_lookup}μs"
+E       AssertionError: Index lookup too slow: 51883.69μs > 100.0μs
+E       assert 51883.687019348145 <= 100.0
+test_aac_3col_priorities.py:408: AssertionError
+___________________________ TestAAC_3ColumnPriorities.test_priority3_overlap_handling_accuracy ____________________________
+self = <tests.test_aac_3col_priorities.TestAAC_3ColumnPriorities object at 0x770d99977b90>
+imported_aac_data = {'aac_index': <Array file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0/aac_...'), 'zarr_group': <Group file:///workspace/tests/testresults/aac_3col_priorities/aac_priorities_store/audio_imports/0>}
+    def test_priority3_overlap_handling_accuracy(self, imported_aac_data):
+        """Priority 3: Validate overlap handling produces accurate results"""
+        print("\n🎯 Priority 3: Validating overlap handling accuracy")
+    
+        zarr_group = imported_aac_data['zarr_group']
+        audio_array = imported_aac_data['audio_array']
+        aac_index = imported_aac_data['aac_index']
+        sample_rate = audio_array.attrs['sample_rate']
+    
+        # Test overlapping extractions to ensure consistency
+        print("🔍 Testing overlapping extractions for consistency")
+    
+        # Extract three overlapping segments
+        base_start = 5000
+        segment_length = 3000
+    
+        # Segment A: [5000:8000]
+        # Segment B: [6000:9000] (overlaps with A)
+        # Segment C: [7000:10000] (overlaps with B)
+    
+        seg_a = extract_audio_segment_aac(zarr_group, audio_array, base_start, base_start + segment_length)
+        seg_b = extract_audio_segment_aac(zarr_group, audio_array, base_start + 1000, base_start + segment_length + 1000)
+        seg_c = extract_audio_segment_aac(zarr_group, audio_array, base_start + 2000, base_start + segment_length + 2000)
+    
+        assert len(seg_a) > 0 and len(seg_b) > 0 and len(seg_c) > 0, "Empty segments"
+    
+        print(f"   Segment A: {len(seg_a)} samples")
+        print(f"   Segment B: {len(seg_b)} samples")
+        print(f"   Segment C: {len(seg_c)} samples")
+    
+        # Test that overlapping regions produce similar results
+        # Compare last part of A with first part of B
+        overlap_length = min(len(seg_a) - 1000, len(seg_b), 1000)
+        if overlap_length > 100:  # Only test if significant overlap
+            a_end = seg_a[-overlap_length:]
+            b_start = seg_b[:overlap_length]
+    
+            # Allow some difference due to frame boundaries, but should be very similar
+            correlation = np.corrcoef(a_end.astype(float), b_start.astype(float))[0, 1]
+    
+            print(f"   Overlap correlation: {correlation:.4f}")
+>           assert correlation > 0.9, f"Overlap correlation too low: {correlation:.4f}"
+E           AssertionError: Overlap correlation too low: -0.5260
+E           assert np.float64(-0.5260390766929753) > 0.9
+test_aac_3col_priorities.py:512: AssertionError
+==================================================== warnings summary =====================================================
+tests/test_aac_3col_priorities.py: 10 warnings
+  /home/jovyan/.venv3.11/lib/python3.11/site-packages/zarr/core/group.py:2481: UserWarning: The `compressor` argument is deprecated. Use `compressors` instead.
+    compressors = *parse*deprecated_compressor(
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================================= short test summary info =================================================
+FAILED test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority1_pyav_extraction_edge_cases - AssertionError: End extraction failed
+FAILED test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority2_random_access_performance - AssertionError: Mean extraction time 399.60ms exceeds target 25.0ms
+FAILED test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority2_index_lookup_performance - AssertionError: Index lookup too slow: 51883.69μs > 100.0μs
+FAILED test_aac_3col_priorities.py::TestAAC_3ColumnPriorities::test_priority3_overlap_handling_accuracy - AssertionError: Overlap correlation too low: -0.5260
+================================== 4 failed, 6 passed, 10 warnings in 264.39s (0:04:24)
