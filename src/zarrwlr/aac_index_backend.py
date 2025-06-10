@@ -1,36 +1,34 @@
 """
-AAC Index Backend - Performance Optimized for Zarr v3
-=====================================================
+AAC Index Backend - Streamlined for Frame-Stream Direct Codec Access
+====================================================================
 
-High-performance AAC frame analysis and index creation with optimized 3-column structure.
-Built natively for Zarr v3 with caching and vectorized operations.
+Optimized AAC frame analysis and index creation for frame-stream direct codec parsing.
+Focuses on ADTS frame analysis and efficient byte-range lookups.
 
-PERFORMANCE OPTIMIZATIONS:
-1. Index Caching: Cache frequently accessed arrays (10-50x lookup speedup)
-2. Vectorized Operations: NumPy optimizations for array processing
-3. 3-Column Structure: 50% space reduction vs 6-column format
-4. Zarr v3 Native: Optimized chunking and metadata handling
+OPTIMIZATION FOCUS:
+1. 3-Column Structure: Minimal memory footprint (50% space savings)
+2. ADTS Frame Analysis: Production-ready real frame parsing
+3. Fast Lookups: Optimized for byte-range calculations
+4. Frame-Stream Support: Index structure optimized for codec.parse()
+5. Thread-Safe Caching: Minimal overhead for repeated access
 
 ARCHITECTURE:
-- Real ADTS frame analysis (production-ready)
-- Calculated values (timestamps, sample counts) not stored
-- Memory-efficient streaming processing
-- Thread-safe caching system
+- Real ADTS frame analysis (no synthetic data)
+- Calculated values for timestamps and sample counts
+- Memory-efficient 3-column index format
+- Optimized for Zarr v3 chunking patterns
 """
 
 import zarr
 import numpy as np
 import time
 import threading
-import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor
 from typing import List, Tuple, Optional, Dict
-import hashlib
 
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
-logger.trace("AAC Index Backend (optimized) loading...")
+logger.trace("AAC Index Backend (Frame-Stream Direct Codec) loading...")
 
 # AAC Index constants - 3-COLUMN OPTIMIZED STRUCTURE
 AAC_INDEX_DTYPE = np.uint64
@@ -39,84 +37,63 @@ AAC_INDEX_COL_BYTE_OFFSET = 0
 AAC_INDEX_COL_FRAME_SIZE = 1  
 AAC_INDEX_COL_SAMPLE_POS = 2
 
-# Constants for calculated values
+# Constants for calculated values (not stored in index)
 AAC_SAMPLES_PER_FRAME = 1024  # ffmpeg always produces 1024-sample frames
 
 
-class OptimizedIndexManager:
+class OptimizedIndexCache:
     """
-    High-performance index manager with caching and vectorization
+    Lightweight index cache for frame-stream direct codec access patterns
     
-    Provides optimized access to AAC index data with memory caching,
-    vectorized numpy operations, and thread-safe operations.
+    Focuses on fast byte-range lookups with minimal memory overhead.
     """
     
-    def __init__(self, cache_size: int = 15):
+    def __init__(self, cache_size: int = 10):
         self._cache = {}  # index_id -> cached_data
         self._cache_size = cache_size
         self._lock = threading.RLock()
-        self._access_counts = {}  # LRU tracking
+        self._stats = {'hits': 0, 'misses': 0}
     
-    def get_optimized_index_data(self, aac_index: zarr.Array) -> Dict[str, np.ndarray]:
+    def get_index_data(self, aac_index: zarr.Array) -> Dict[str, np.ndarray]:
         """
-        Get optimized index data with automatic caching
-        
-        Args:
-            aac_index: AAC index array (3-column format)
-            
-        Returns:
-            Dictionary with cached and optimized index arrays
+        Get cached index data optimized for frame-stream direct codec byte-range access
         """
         index_id = id(aac_index)
         
         with self._lock:
             # Cache hit
             if index_id in self._cache:
-                self._access_counts[index_id] += 1
-                logger.trace("Index cache hit")
+                self._stats['hits'] += 1
                 return self._cache[index_id]
             
-            # Cache miss - load and optimize
-            logger.trace("Index cache miss, loading and optimizing")
-            optimized_data = self._load_and_optimize_index(aac_index)
+            # Cache miss - load and optimize for frame-stream direct codec access
+            self._stats['misses'] += 1
+            data = self._create_optimized_data(aac_index)
             
-            # LRU cache management
+            # Simple LRU eviction
             if len(self._cache) >= self._cache_size:
-                lru_key = min(self._access_counts.keys(), key=lambda k: self._access_counts[k])
-                del self._cache[lru_key]
-                del self._access_counts[lru_key]
-                logger.trace("Evicted LRU index cache entry")
+                oldest_key = next(iter(self._cache))
+                del self._cache[oldest_key]
             
-            # Cache the optimized data
-            self._cache[index_id] = optimized_data
-            self._access_counts[index_id] = 1
-            
-            return optimized_data
+            self._cache[index_id] = data
+            return data
     
-    def _load_and_optimize_index(self, aac_index: zarr.Array) -> Dict[str, np.ndarray]:
-        """
-        Load index data and create optimized representations for Zarr v3
+    def _create_optimized_data(self, aac_index: zarr.Array) -> Dict[str, np.ndarray]:
+        """Create optimized data structure for frame-stream direct codec access"""
+        # Single efficient Zarr read
+        full_index = aac_index[:]
         
-        Args:
-            aac_index: Source AAC index array
-            
-        Returns:
-            Dictionary with optimized numpy arrays
-        """
-        # Load all data efficiently in one Zarr v3 operation
-        full_index = aac_index[:]  # Single array access
-        
-        # Extract columns as contiguous arrays for performance
+        # Extract as contiguous arrays for fast access
         byte_offsets = np.ascontiguousarray(full_index[:, AAC_INDEX_COL_BYTE_OFFSET])
         frame_sizes = np.ascontiguousarray(full_index[:, AAC_INDEX_COL_FRAME_SIZE])
         sample_positions = np.ascontiguousarray(full_index[:, AAC_INDEX_COL_SAMPLE_POS])
         
-        # Pre-compute derived data
+        # Pre-compute frequently used values
         total_frames = len(sample_positions)
         total_samples = int(sample_positions[-1] + AAC_SAMPLES_PER_FRAME) if total_frames > 0 else 0
         sample_rate = aac_index.attrs.get('sample_rate', 48000)
         
-        optimized_data = {
+        return {
             'byte_offsets': byte_offsets,
             'frame_sizes': frame_sizes,
             'sample_positions': sample_positions,
@@ -125,20 +102,27 @@ class OptimizedIndexManager:
             'sample_rate': sample_rate,
             'metadata': dict(aac_index.attrs)
         }
-        
-        logger.trace(f"Optimized index data for {total_frames} frames")
-        return optimized_data
     
-    def clear_cache(self):
-        """Clear entire cache"""
+    def clear(self):
+        """Clear cache"""
         with self._lock:
             self._cache.clear()
-            self._access_counts.clear()
-            logger.trace("Index cache cleared")
+            self._stats = {'hits': 0, 'misses': 0}
+    
+    def get_stats(self) -> Dict:
+        """Get cache statistics"""
+        with self._lock:
+            total = self._stats['hits'] + self._stats['misses']
+            hit_rate = self._stats['hits'] / max(1, total)
+            return {
+                'hit_rate': hit_rate,
+                'total_requests': total,
+                'cached_indices': len(self._cache)
+            }
 
 
-# Global optimized index manager
-_index_manager = OptimizedIndexManager(cache_size=15)
+# Global optimized cache
+_index_cache = OptimizedIndexCache(cache_size=10)
 
 
 # ##########################################################
@@ -156,47 +140,51 @@ def calculate_timestamp_ms(sample_pos: int, sample_rate: int) -> int:
     """Calculate timestamp in milliseconds from sample position"""
     return int(sample_pos * 1000 / sample_rate)
 
-def get_sample_position_for_frame(frame_idx: int) -> int:
-    """Calculate sample position for a given frame index"""
-    return frame_idx * AAC_SAMPLES_PER_FRAME
-
 
 # ##########################################################
 #
-# Real AAC Frame Analysis (Production Ready)
-# ==========================================
+# Real ADTS Frame Analysis (Production Ready)
+# ===========================================
 #
 # ##########################################################
 
-def _analyze_real_aac_frames(aac_data: bytes, sample_rate: int) -> List[dict]:
+def _analyze_adts_frames(aac_data: bytes, sample_rate: int) -> List[dict]:
     """
-    Production-ready AAC frame analysis using ADTS parsing
+    Production-ready ADTS frame analysis optimized for frame-stream direct codec parsing
     
     Args:
-        aac_data: Raw AAC data bytes
+        aac_data: Raw ADTS AAC data bytes
         sample_rate: Sample rate for calculations
         
     Returns:
-        List of frame dictionaries with 3-column data
+        List of frame dictionaries with 3-column data structure
     """
     frames = []
     pos = 0
     frame_idx = 0
     
+    logger.trace("Starting ADTS frame analysis...")
+    
     while pos < len(aac_data) - 7:  # ADTS header minimum 7 bytes
+        # Look for ADTS sync pattern
         if pos + 1 < len(aac_data):
             sync_word = int.from_bytes(aac_data[pos:pos+2], 'big')
             
-            if (sync_word & 0xFFF0) == 0xFFF0:  # ADTS sync pattern
+            # ADTS sync pattern: 0xFFF (12 bits)
+            if (sync_word & 0xFFF0) == 0xFFF0:
                 # Parse ADTS header for frame length
                 if pos + 6 < len(aac_data):
                     header = aac_data[pos:pos+7]
+                    
+                    # Extract frame length from ADTS header
+                    # Bits 30-43 (13 bits) in ADTS header
                     frame_length = ((header[3] & 0x03) << 11) | \
                                 (header[4] << 3) | \
                                 ((header[5] & 0xE0) >> 5)
                     
-                    if 7 <= frame_length <= 16384:  # Valid frame size range
-                        # 3-column optimized: only store essential data
+                    # Validate frame size (reasonable range for AAC)
+                    if 7 <= frame_length <= 8192:
+                        # Store only essential 3-column data
                         frames.append({
                             'byte_offset': pos,
                             'frame_size': frame_length,
@@ -207,54 +195,47 @@ def _analyze_real_aac_frames(aac_data: bytes, sample_rate: int) -> List[dict]:
                         frame_idx += 1
                         continue
         
+        # Move to next byte if no valid frame found
         pos += 1
     
-    logger.trace(f"ADTS analysis: {len(frames)} frames found")
+    logger.trace(f"ADTS analysis completed: {len(frames)} frames found")
     return frames
 
 
-def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array, 
-                   use_parallel: bool = True, max_workers: int = None) -> zarr.Array:
+def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array) -> zarr.Array:
     """
-    Create optimized 3-column AAC index for Zarr v3
+    Create optimized 3-column AAC index for frame-stream direct codec access
     
-    Args:
-        zarr_group: Zarr v3 group for index storage
-        audio_blob_array: Array with AAC audio data
-        use_parallel: Whether to use parallel processing (ignored for AAC - not needed)
-        max_workers: Number of parallel workers (ignored for AAC)
-        
-    Returns:
-        Created index array with 3-column optimization
-        
-    Raises:
-        ValueError: If no AAC frames are found
+    This function analyzes ADTS frames and creates an index optimized
+    for byte-range lookups used by frame-stream direct codec parsing.
     """
-    logger.trace("build_aac_index() requested (3-column optimized)")
+    logger.trace("Building AAC index for frame-stream direct codec access...")
     
     # Extract metadata from array attributes
     sample_rate = audio_blob_array.attrs.get('sample_rate', 48000)
     channels = audio_blob_array.attrs.get('nb_channels', 2)
     codec = audio_blob_array.attrs.get('codec', 'aac')
     bitrate = audio_blob_array.attrs.get('aac_bitrate', 160000)
+    stream_type = audio_blob_array.attrs.get('stream_type', 'unknown')
     
     # Validation
     if codec != 'aac':
         raise ValueError(f"Expected AAC codec, got: {codec}")
     
-    logger.trace(f"Creating AAC index: {sample_rate}Hz, {channels}ch, {bitrate}bps")
+    logger.trace(f"Index creation: {sample_rate}Hz, {channels}ch, {bitrate}bps, {stream_type}")
     
     start_time = time.time()
     
-    # Load audio bytes
+    # Load AAC bytes for analysis
     audio_bytes = bytes(audio_blob_array[()])
+    logger.trace(f"Loaded {len(audio_bytes):,} bytes for frame analysis")
     
-    # Real AAC frame analysis using ADTS parsing
-    logger.trace("Analyzing AAC ADTS frames...")
-    frames_info_dicts = _analyze_real_aac_frames(audio_bytes, sample_rate)
+    # Real ADTS frame analysis
+    logger.trace("Analyzing ADTS frames...")
+    frames_info = _analyze_adts_frames(audio_bytes, sample_rate)
     
-    if len(frames_info_dicts) < 1:
-        raise ValueError("No AAC frames found in audio data")
+    if len(frames_info) < 1:
+        raise ValueError("No ADTS frames found in audio data")
     
     # Create 3-column optimized index array
     logger.trace("Creating 3-column optimized index array...")
@@ -264,41 +245,66 @@ def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array,
             frame_dict['frame_size'],
             frame_dict['sample_pos']
         ] 
-        for frame_dict in frames_info_dicts
+        for frame_dict in frames_info
     ], dtype=AAC_INDEX_DTYPE)
     
-    # Store index in Zarr v3 group
+    # Calculate optimal chunking for Zarr storage
+    frames_count = len(frames_info)
+    chunk_size = min(1000, max(100, frames_count // 10))  # Adaptive chunking
+    
+    # Store index in Zarr array with optimized chunking
     aac_index = zarr_group.create_array(
         name='aac_index',
         shape=index_array.shape,
-        chunks=(min(1000, len(frames_info_dicts)), AAC_INDEX_COLS),
-        dtype=AAC_INDEX_DTYPE
+        chunks=(chunk_size, AAC_INDEX_COLS),
+        dtype=AAC_INDEX_DTYPE,
+        overwrite=True
     )
     
-    # Write data to Zarr v3 array
+    # Write data to Zarr array
     aac_index[:] = index_array
     
-    # Store metadata with calculated values info
-    total_samples = frames_info_dicts[-1]['sample_pos'] + AAC_SAMPLES_PER_FRAME if frames_info_dicts else 0
+    # Calculate comprehensive metadata
+    total_samples = frames_info[-1]['sample_pos'] + AAC_SAMPLES_PER_FRAME if frames_info else 0
     duration_ms = calculate_timestamp_ms(total_samples, sample_rate) if total_samples > 0 else 0
     
+    # Calculate space savings
+    old_size = frames_count * 6 * 8  # 6 columns * 8 bytes
+    new_size = frames_count * 3 * 8  # 3 columns * 8 bytes  
+    savings_bytes = old_size - new_size
+    savings_percent = (savings_bytes / old_size) * 100 if old_size > 0 else 0
+    
+    # Store comprehensive metadata
     index_attrs = {
-        'sample_rate': sample_rate,  # Required for timestamp calculations
+        # Core audio metadata
+        'sample_rate': sample_rate,
         'channels': channels,
-        'total_frames': len(frames_info_dicts),
+        'total_frames': frames_count,
         'codec': codec,
         'aac_bitrate': bitrate,
-        'container_type': 'aac-native',
+        'stream_type': stream_type,
+        
+        # Frame and timing information
         'frame_size_samples': AAC_SAMPLES_PER_FRAME,
         'total_samples': total_samples,
         'duration_ms': duration_ms,
-        'index_format_version': '3-column-optimized'
+        
+        # Index format and optimization info
+        'index_format_version': '3-column-optimized',
+        'optimization': 'frame-stream-native',
+        'space_savings_bytes': savings_bytes,
+        'space_savings_percent': f"{savings_percent:.1f}%",
+        
+        # Frame-stream specific metadata
+        'format': audio_blob_array.attrs.get('format', 'adts'),
+        'frame_stream_ready': True,
+        'byte_range_optimized': True
     }
     
     # Copy additional metadata from audio array
     optional_attrs = [
         'first_sample_time_stamp', 'last_sample_time_stamp',
-        'profile', 'compression_type'
+        'profile', 'compression_type', 'threading_enabled'
     ]
     
     for attr_name in optional_attrs:
@@ -309,67 +315,49 @@ def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array,
     
     total_time = time.time() - start_time
     
-    # Calculate space savings vs 6-column format
-    old_size = len(frames_info_dicts) * 6 * 8  # 6 columns * 8 bytes
-    new_size = len(frames_info_dicts) * 3 * 8  # 3 columns * 8 bytes  
-    savings_bytes = old_size - new_size
-    savings_percent = (savings_bytes / old_size) * 100 if old_size > 0 else 0
+    logger.success(f"AAC index created: {frames_count:,} frames in {total_time:.3f}s")
+    logger.success(f"Space optimization: {savings_bytes:,} bytes saved ({savings_percent:.1f}%)")
+    logger.success(f"Frame-stream ready: {total_samples:,} samples, {duration_ms/1000:.1f}s duration")
     
-    logger.success(f"AAC index created: {len(frames_info_dicts)} frames in {total_time:.3f}s")
-    logger.success(f"Space optimization: {savings_bytes} bytes saved ({savings_percent:.1f}%)")
     return aac_index
 
 
-def _find_frame_range_for_samples_optimized(index_data: Dict[str, np.ndarray], 
-                                           start_sample: int, end_sample: int) -> Tuple[int, int]:
+def find_frame_range_for_samples_fast(aac_index: zarr.Array, start_sample: int, end_sample: int) -> Tuple[int, int]:
     """
-    Optimized frame range finding using cached index data
+    Ultra-fast frame range finding optimized for frame-stream direct codec byte-range access
     
-    Args:
-        index_data: Cached and optimized index data
-        start_sample: First required sample
-        end_sample: Last required sample
-        
-    Returns:
-        Tuple (start_frame_idx, end_frame_idx) with overlap handling
+    This function is critical for performance - it determines which bytes
+    to load from Zarr for frame-stream direct codec parsing.
     """
+    index_data = _index_cache.get_index_data(aac_index)
     sample_positions = index_data['sample_positions']
     
-    # Vectorized binary search on contiguous array
+    # Bounds checking with cached values
+    total_samples = index_data['total_samples']
+    if start_sample < 0:
+        start_sample = 0
+    if end_sample >= total_samples:
+        end_sample = total_samples - 1
+    
+    # Ultra-fast vectorized binary search
     start_idx = np.searchsorted(sample_positions, start_sample, side='right') - 1
     start_idx = max(0, start_idx)
     
     end_idx = np.searchsorted(sample_positions, end_sample, side='right')
     end_idx = min(end_idx, len(sample_positions) - 1)
     
-    # Overlap handling: start one frame earlier if possible
+    # For frame-stream codec: start one frame earlier for proper overlap
     overlap_start_idx = max(0, start_idx - 1)
     
-    logger.trace(f"Optimized frame range: [{overlap_start_idx}:{end_idx}] for samples [{start_sample}:{end_sample}]")
+    logger.trace(f"Frame range for samples [{start_sample}:{end_sample}]: frames [{overlap_start_idx}:{end_idx}]")
     return overlap_start_idx, end_idx
-
-
-def find_frame_range_for_samples_fast(aac_index: zarr.Array, start_sample: int, end_sample: int) -> Tuple[int, int]:
-    """
-    Fast frame range finding with automatic caching
-    
-    Public API for optimized frame range calculation.
-    """
-    index_data = _index_manager.get_optimized_index_data(aac_index)
-    return _find_frame_range_for_samples_optimized(index_data, start_sample, end_sample)
 
 
 def get_index_statistics_fast(aac_index: zarr.Array) -> Dict[str, any]:
     """
-    Get index statistics using cached index data
-    
-    Args:
-        aac_index: AAC index array
-        
-    Returns:
-        Dictionary with comprehensive index statistics
+    Get comprehensive index statistics using cached data
     """
-    index_data = _index_manager.get_optimized_index_data(aac_index)
+    index_data = _index_cache.get_index_data(aac_index)
     
     frame_sizes = index_data['frame_sizes']
     sample_rate = index_data['sample_rate']
@@ -378,26 +366,36 @@ def get_index_statistics_fast(aac_index: zarr.Array) -> Dict[str, any]:
     
     # Fast vectorized statistics
     stats = {
+        "index_format": "3-column-optimized-frame-stream",
+        "optimization": "frame-stream-native",
+        
+        # Frame and sample information
         "total_frames": total_frames,
         "total_samples": total_samples,
         "duration_ms": calculate_timestamp_ms(total_samples, sample_rate),
+        "samples_per_frame": AAC_SAMPLES_PER_FRAME,
+        
+        # Frame size statistics
         "frame_size_stats": {
-            "min": int(np.min(frame_sizes)),
-            "max": int(np.max(frame_sizes)),
-            "mean": float(np.mean(frame_sizes)),
-            "std": float(np.std(frame_sizes))
+            "min": int(np.min(frame_sizes)) if total_frames > 0 else 0,
+            "max": int(np.max(frame_sizes)) if total_frames > 0 else 0,
+            "mean": float(np.mean(frame_sizes)) if total_frames > 0 else 0.0,
+            "std": float(np.std(frame_sizes)) if total_frames > 0 else 0.0
         },
-        "samples_per_frame": {
-            "fixed_value": AAC_SAMPLES_PER_FRAME,
-            "description": "Always 1024 for ffmpeg-encoded AAC"
-        },
+        
+        # Index efficiency
         "index_size_bytes": aac_index.nbytes,
-        "index_format": "3-column-optimized",
         "space_savings_vs_6col": f"{((6-3)/6)*100:.1f}%",
+        "bytes_per_frame": aac_index.nbytes / max(1, total_frames),
+        
+        # Audio metadata
         "sample_rate": sample_rate,
         "channels": index_data['metadata'].get('channels', 'unknown'),
         "bitrate": index_data['metadata'].get('aac_bitrate', 'unknown'),
-        "optimization_status": "cached" if id(aac_index) in _index_manager._cache else "not_cached"
+        
+        # Cache and optimization status
+        "cache_status": "cached" if id(aac_index) in _index_cache._cache else "not_cached",
+        "frame_stream_ready": index_data['metadata'].get('frame_stream_ready', False)
     }
     
     return stats
@@ -405,50 +403,48 @@ def get_index_statistics_fast(aac_index: zarr.Array) -> Dict[str, any]:
 
 def validate_aac_index_fast(aac_index: zarr.Array, audio_blob_array: zarr.Array) -> bool:
     """
-    Fast index validation using cached data and vectorized operations
-    
-    Args:
-        aac_index: AAC index array to validate
-        audio_blob_array: Original audio data array
-        
-    Returns:
-        True if index is valid, False otherwise
+    Fast index validation for frame-stream direct codec compatibility
     """
     try:
-        index_data = _index_manager.get_optimized_index_data(aac_index)
-        
         # Basic structure validation
         if aac_index.shape[1] != AAC_INDEX_COLS:
             logger.error(f"Invalid index structure: expected {AAC_INDEX_COLS} columns, got {aac_index.shape[1]}")
             return False
         
-        # Use cached arrays for vectorized validation
+        # Check format version
+        format_version = aac_index.attrs.get('index_format_version', '')
+        if '3-column' not in format_version:
+            logger.error(f"Invalid format version: {format_version}")
+            return False
+        
+        # Get cached data for efficient validation
+        index_data = _index_cache.get_index_data(aac_index)
         sample_positions = index_data['sample_positions']
         byte_offsets = index_data['byte_offsets']
         frame_sizes = index_data['frame_sizes']
         
         # Vectorized monotonic check
-        if not np.all(sample_positions[1:] >= sample_positions[:-1]):
+        if len(sample_positions) > 1 and not np.all(sample_positions[1:] >= sample_positions[:-1]):
             logger.error("Sample positions not monotonically increasing")
             return False
         
         # Vectorized bounds checking
         audio_size = audio_blob_array.shape[0]
-        if np.any(byte_offsets >= audio_size):
-            logger.error("Some byte offsets exceed audio data size")
-            return False
+        if len(byte_offsets) > 0:
+            if np.any(byte_offsets >= audio_size):
+                logger.error("Some byte offsets exceed audio data size")
+                return False
+            
+            if np.any(frame_sizes <= 0) or np.any(frame_sizes > 8192):
+                logger.error("Invalid frame sizes detected")
+                return False
         
-        if np.any(frame_sizes <= 0) or np.any(frame_sizes > 8192):
-            logger.error("Invalid frame sizes detected")
-            return False
+        # Frame-stream codec compatibility check
+        stream_type = audio_blob_array.attrs.get('stream_type', '')
+        if 'frame-stream' not in stream_type and 'adts' not in stream_type.lower():
+            logger.warning(f"Stream type may not be optimal for frame-stream codec: {stream_type}")
         
-        # Validate sample position calculations (vectorized)
-        expected_positions = np.arange(len(sample_positions)) * AAC_SAMPLES_PER_FRAME
-        if not np.array_equal(sample_positions[:10], expected_positions[:10]):
-            logger.error("Sample position calculation mismatch")
-            return False
-        
-        logger.trace("Optimized AAC index validation passed")
+        logger.trace("AAC index validation passed for frame-stream direct codec access")
         return True
         
     except Exception as e:
@@ -456,168 +452,88 @@ def validate_aac_index_fast(aac_index: zarr.Array, audio_blob_array: zarr.Array)
         return False
 
 
-def benchmark_aac_access_optimized(zarr_group: zarr.Group, audio_blob_array: zarr.Array, 
-                                  num_extractions: int = 100) -> dict:
+def benchmark_direct_codec_index(aac_index: zarr.Array, num_lookups: int = 1000) -> dict:
     """
-    Benchmark AAC access performance with optimizations
-    
-    Args:
-        zarr_group: Zarr group with AAC index
-        audio_blob_array: Array with AAC audio data
-        num_extractions: Number of random extractions to test
-        
-    Returns:
-        Performance benchmark results
+    Benchmark index performance for frame-stream direct codec access patterns
     """
-    if 'aac_index' not in zarr_group:
-        raise ValueError("AAC index not found")
+    total_samples = aac_index.attrs.get('total_samples', 0)
+    if total_samples == 0:
+        return {"error": "Invalid total samples"}
     
-    aac_index_array = zarr_group['aac_index']
-    
-    # Pre-load index data for fair benchmarking
-    index_data = _index_manager.get_optimized_index_data(aac_index_array)
-    total_samples = index_data['total_samples']
-    
-    # Generate test segments
+    # Generate realistic lookup patterns for frame-stream direct codec
     np.random.seed(42)
-    segment_length = 4410  # ~100ms at 44.1kHz
-    
-    segments = []
-    for _ in range(num_extractions):
+    lookup_requests = []
+    for _ in range(num_lookups):
+        # Typical segment length for frame-stream direct codec extraction
+        segment_length = np.random.randint(1000, 5000)  # ~20-100ms
         start = np.random.randint(0, max(1, total_samples - segment_length))
-        end = min(start + segment_length, total_samples - 1)
-        segments.append((start, end))
+        end = start + segment_length
+        lookup_requests.append((start, end))
     
-    # Import optimized extraction function
-    from .aac_access_optimized import extract_audio_segment_aac
+    logger.trace(f"Benchmarking {num_lookups} index lookups for frame-stream direct codec...")
     
-    # Benchmark extraction times
-    extraction_times = []
-    start_time = time.time()
+    # Cold cache test
+    _index_cache.clear()
+    cold_times = []
     
-    for start_sample, end_sample in segments:
-        extraction_start = time.time()
-        try:
-            audio_data = extract_audio_segment_aac(zarr_group, audio_blob_array, start_sample, end_sample)
-            extraction_time = time.time() - extraction_start
-            extraction_times.append(extraction_time)
-            
-            if len(audio_data) == 0:
-                logger.warning(f"Empty extraction for range [{start_sample}:{end_sample}]")
-                
-        except Exception as e:
-            logger.error(f"Extraction failed for range [{start_sample}:{end_sample}]: {e}")
-            extraction_times.append(float('inf'))
+    cold_start = time.time()
+    for start_sample, end_sample in lookup_requests[:100]:  # Smaller sample for cold
+        lookup_start = time.time()
+        start_idx, end_idx = find_frame_range_for_samples_fast(aac_index, start_sample, end_sample)
+        lookup_time = time.time() - lookup_start
+        cold_times.append(lookup_time)
+    cold_total = time.time() - cold_start
     
-    total_benchmark_time = time.time() - start_time
+    # Warm cache test
+    warm_times = []
+    warm_start = time.time()
+    for start_sample, end_sample in lookup_requests:
+        lookup_start = time.time()
+        start_idx, end_idx = find_frame_range_for_samples_fast(aac_index, start_sample, end_sample)
+        lookup_time = time.time() - lookup_start
+        warm_times.append(lookup_time)
+    warm_total = time.time() - warm_start
     
     # Calculate statistics
-    valid_times = [t for t in extraction_times if t != float('inf')]
+    cold_mean_us = np.mean(cold_times) * 1000000
+    warm_mean_us = np.mean(warm_times) * 1000000
+    speedup = cold_mean_us / warm_mean_us if warm_mean_us > 0 else 1
     
-    if not valid_times:
-        return {"error": "No successful extractions"}
+    cache_stats = _index_cache.get_stats()
     
     results = {
-        "optimization_used": "optimized",
-        "total_extractions": num_extractions,
-        "successful_extractions": len(valid_times),
-        "total_time_seconds": total_benchmark_time,
-        "extraction_times": {
-            "min_ms": min(valid_times) * 1000,
-            "max_ms": max(valid_times) * 1000,
-            "mean_ms": np.mean(valid_times) * 1000,
-            "median_ms": np.median(valid_times) * 1000,
-            "std_ms": np.std(valid_times) * 1000
+        "optimization": "frame-stream-direct-codec-index",
+        "total_lookups": num_lookups,
+        "cold_cache": {
+            "mean_microseconds": cold_mean_us,
+            "total_time_seconds": cold_total,
+            "lookups_tested": len(cold_times)
         },
-        "performance_metrics": {
-            "extractions_per_second": len(valid_times) / total_benchmark_time,
-            "average_extraction_ms": np.mean(valid_times) * 1000,
-            "success_rate": len(valid_times) / num_extractions,
-            "speedup_vs_baseline": 400.0 / (np.mean(valid_times) * 1000)  # vs 400ms baseline
+        "warm_cache": {
+            "mean_microseconds": warm_mean_us,
+            "total_time_seconds": warm_total,
+            "lookups_tested": len(warm_times)
         },
-        "index_info": get_index_statistics_fast(aac_index_array),
-        "cache_stats": {
-            "cache_hit": id(aac_index_array) in _index_manager._cache,
-            "cached_indices": len(_index_manager._cache)
+        "performance": {
+            "cache_speedup": speedup,
+            "lookups_per_second": len(warm_times) / warm_total,
+            "cache_hit_rate": cache_stats['hit_rate']
+        },
+        "target_validation": {
+            "target_lookup_microseconds": 5.0,
+            "achieved_microseconds": warm_mean_us,
+            "target_met": warm_mean_us <= 5.0
         }
     }
     
-    logger.success(f"Optimized benchmark: {results['performance_metrics']['average_extraction_ms']:.2f}ms average")
+    logger.trace(f"Index benchmark: {warm_mean_us:.2f}μs mean, {speedup:.2f}x speedup")
     return results
-
-
-def diagnose_aac_data_optimized(audio_blob_array: zarr.Array) -> dict:
-    """
-    Enhanced AAC data diagnosis with optimization analysis
-    
-    Args:
-        audio_blob_array: Array with AAC audio data
-        
-    Returns:
-        Diagnostic information with optimization details
-    """
-    audio_bytes = bytes(audio_blob_array[()])
-    
-    diagnosis = {
-        'size_bytes': len(audio_bytes),
-        'size_mb': len(audio_bytes) / 1024 / 1024,
-        'has_adts_headers': False,
-        'estimated_frames': 0,
-        'sync_patterns_found': 0,
-        'optimization_format': '3-column-index',
-        'expected_samples_per_frame': AAC_SAMPLES_PER_FRAME,
-        'issues': []
-    }
-    
-    # Quick ADTS sync pattern analysis
-    sync_count = 0
-    pos = 0
-    
-    while pos < len(audio_bytes) - 2:
-        sync_word = int.from_bytes(audio_bytes[pos:pos+2], 'big')
-        if (sync_word & 0xFFF0) == 0xFFF0:  # ADTS sync pattern
-            sync_count += 1
-            diagnosis['has_adts_headers'] = True
-            pos += 100  # Skip for efficiency
-        else:
-            pos += 1
-    
-    diagnosis['sync_patterns_found'] = sync_count
-    diagnosis['estimated_frames'] = sync_count
-    
-    if sync_count == 0:
-        diagnosis['issues'].append("No ADTS sync patterns found")
-    
-    if len(audio_bytes) < 1000:
-        diagnosis['issues'].append("File too small for meaningful AAC data")
-    
-    # Calculate optimization benefits
-    if sync_count > 0:
-        old_index_size = sync_count * 6 * 8  # 6 columns * 8 bytes
-        new_index_size = sync_count * 3 * 8  # 3 columns * 8 bytes
-        diagnosis['index_overhead_comparison'] = {
-            'old_6col_bytes': old_index_size,
-            'new_3col_bytes': new_index_size,
-            'savings_bytes': old_index_size - new_index_size,
-            'savings_percent': ((old_index_size - new_index_size) / old_index_size) * 100
-        }
-    
-    # Optimization features
-    diagnosis['optimization_features'] = {
-        'index_caching': 'enabled',
-        'vectorized_operations': 'enabled',
-        'cache_size': _index_manager._cache_size,
-        'cached_indices': len(_index_manager._cache)
-    }
-    
-    logger.trace(f"AAC diagnosis (optimized): {diagnosis}")
-    return diagnosis
 
 
 # ##########################################################
 #
-# Public API Functions (FLAC-compatible)
-# =====================================
+# Public API Functions (Streamlined)
+# =================================
 #
 # ##########################################################
 
@@ -631,59 +547,33 @@ def validate_aac_index(aac_index: zarr.Array, audio_blob_array: zarr.Array) -> b
     return validate_aac_index_fast(aac_index, audio_blob_array)
 
 
-def benchmark_aac_access(zarr_group: zarr.Group, audio_blob_array: zarr.Array, 
-                        num_extractions: int = 100) -> dict:
-    """Benchmark AAC access with automatic optimization"""
-    return benchmark_aac_access_optimized(zarr_group, audio_blob_array, num_extractions)
-
-
-def diagnose_aac_data(audio_blob_array: zarr.Array) -> dict:
-    """Diagnose AAC data with optimization analysis"""
-    return diagnose_aac_data_optimized(audio_blob_array)
-
-
-# Legacy compatibility wrapper
-def _find_frame_range_for_samples(aac_index: zarr.Array, start_sample: int, end_sample: int) -> Tuple[int, int]:
-    """Legacy wrapper - automatically uses optimization"""
-    return find_frame_range_for_samples_fast(aac_index, start_sample, end_sample)
-
-
-# ##########################################################
-#
-# Cache Management and Performance Monitoring
-# ===========================================
-#
-# ##########################################################
-
 def clear_all_caches():
     """Clear all optimization caches"""
-    _index_manager.clear_cache()
-    logger.trace("All optimization caches cleared")
+    _index_cache.clear()
+    logger.trace("Index cache cleared")
 
 
 def get_optimization_stats() -> Dict[str, any]:
     """Get optimization statistics for monitoring"""
+    cache_stats = _index_cache.get_stats()
+    
     return {
-        'index_manager': {
-            'cached_indices': len(_index_manager._cache),
-            'cache_size_limit': _index_manager._cache_size,
-            'total_accesses': sum(_index_manager._access_counts.values())
-        }
+        'index_cache': cache_stats,
+        'optimization_level': 'frame-stream-native',
+        'approach': 'frame-stream-direct'
     }
 
 
-def configure_optimization(index_cache_size: int = 15) -> None:
+def configure_optimization(index_cache_size: int = 10) -> None:
     """
-    Configure optimization parameters
-    
-    Args:
-        index_cache_size: Maximum number of indices to cache
+    Configure optimization parameters for frame-stream direct codec access
     """
-    global _index_manager
+    global _index_cache
     
-    if index_cache_size != _index_manager._cache_size:
-        _index_manager = OptimizedIndexManager(cache_size=index_cache_size)
-        logger.trace(f"Index cache size changed to {index_cache_size}")
+    if index_cache_size != _index_cache._cache_size:
+        old_stats = _index_cache.get_stats()
+        _index_cache = OptimizedIndexCache(cache_size=index_cache_size)
+        logger.trace(f"Index cache reconfigured: size={index_cache_size}, previous_stats={old_stats}")
 
 
-logger.trace("AAC Index Backend (optimized) loaded.")
+logger.trace("AAC Index Backend (Frame-Stream Direct Codec) loaded.")

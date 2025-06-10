@@ -20,7 +20,7 @@ The system leverages AAC-LC's **frame-based architecture** where each frame (~21
 **Architecture Principles:**
 - **Zarr v3 Arrays:** Store AAC-LC byte-streams as chunked binary data with metadata
 - **Frame Index Arrays:** Separate Zarr arrays containing frame positions, sizes, and timing
-- **PyAV Decoding:** Native Python AAC decoding for zero subprocess overhead
+- **PyAV Decoding:** Native Python AAC decoding for zero subprocess overhead <== DON'T USE CONTAINERS!
 - **Streaming Import:** Process large files efficiently during ffmpeg conversion
 - **Sample-Accurate Access:** Frame-level granularity with sample-precise trimming
 
