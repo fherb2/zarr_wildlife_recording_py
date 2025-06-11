@@ -25,6 +25,7 @@ import time
 import threading
 from typing import List, Tuple, Optional, Dict
 
+
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
@@ -204,12 +205,12 @@ def _analyze_adts_frames(aac_data: bytes, sample_rate: int) -> List[dict]:
 
 def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array) -> zarr.Array:
     """
-    Create optimized 3-column AAC index for frame-stream direct codec access
+    Create optimized 3-column AAC index with configurable chunking
     
     This function analyzes ADTS frames and creates an index optimized
-    for byte-range lookups used by frame-stream direct codec parsing.
+    for byte-range lookups used by ADTS format processing.
     """
-    logger.trace("Building AAC index for frame-stream direct codec access...")
+    logger.trace("Building AAC index with configurable chunking...")
     
     # Extract metadata from array attributes
     sample_rate = audio_blob_array.attrs.get('sample_rate', 48000)
@@ -248,9 +249,34 @@ def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array) -> zar
         for frame_dict in frames_info
     ], dtype=AAC_INDEX_DTYPE)
     
-    # Calculate optimal chunking for Zarr storage
+    # CONFIGURABLE CHUNKING: Use Config parameters
+    from .config import Config
+    
     frames_count = len(frames_info)
-    chunk_size = min(1000, max(100, frames_count // 10))  # Adaptive chunking
+    
+    # Adaptive chunking with configurable parameters
+    target_chunk_size_bytes = Config.aac_index_target_chunk_kb * 1024
+    bytes_per_frame = AAC_INDEX_COLS * 8
+    optimal_chunk_frames = target_chunk_size_bytes // bytes_per_frame
+    
+    if frames_count <= Config.aac_index_min_chunk_frames:
+        # Small files: single chunk
+        chunk_size = frames_count
+    elif frames_count <= 50000:
+        # Medium files: use base chunk size or quarter of frames
+        chunk_size = max(Config.aac_index_chunk_size // 2, frames_count // 4)
+    else:
+        # Large files: aim for optimal chunk size but respect max chunks limit
+        max_chunks = Config.aac_index_max_chunks
+        min_chunk_size = max(Config.aac_index_min_chunk_frames, frames_count // max_chunks)
+        chunk_size = max(min_chunk_size, min(optimal_chunk_frames, frames_count // 20))
+    
+    # Ensure reasonable bounds using config parameters
+    chunk_size = max(Config.aac_index_min_chunk_frames, min(chunk_size, 100000))
+    
+    logger.trace(f"Index chunking: {frames_count:,} frames -> {chunk_size:,} per chunk")
+    logger.trace(f"Chunk size: {chunk_size * bytes_per_frame / 1024:.1f}KB")
+    logger.trace(f"Total chunks: {(frames_count + chunk_size - 1) // chunk_size}")
     
     # Store index in Zarr array with optimized chunking
     aac_index = zarr_group.create_array(
@@ -291,13 +317,18 @@ def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array) -> zar
         
         # Index format and optimization info
         'index_format_version': '3-column-optimized',
-        'optimization': 'frame-stream-native',
+        'optimization': 'adts-native',
         'space_savings_bytes': savings_bytes,
         'space_savings_percent': f"{savings_percent:.1f}%",
         
-        # Frame-stream specific metadata
+        # Chunking information
+        'chunk_size_frames': chunk_size,
+        'chunk_size_kb': chunk_size * bytes_per_frame / 1024,
+        'total_chunks': (frames_count + chunk_size - 1) // chunk_size,
+        
+        # ADTS specific metadata
         'format': audio_blob_array.attrs.get('format', 'adts'),
-        'frame_stream_ready': True,
+        'adts_format_ready': True,
         'byte_range_optimized': True
     }
     
@@ -317,7 +348,8 @@ def build_aac_index(zarr_group: zarr.Group, audio_blob_array: zarr.Array) -> zar
     
     logger.success(f"AAC index created: {frames_count:,} frames in {total_time:.3f}s")
     logger.success(f"Space optimization: {savings_bytes:,} bytes saved ({savings_percent:.1f}%)")
-    logger.success(f"Frame-stream ready: {total_samples:,} samples, {duration_ms/1000:.1f}s duration")
+    logger.success(f"Chunking: {chunk_size:,} frames per chunk ({chunk_size * bytes_per_frame / 1024:.1f}KB)")
+    logger.success(f"ADTS format ready: {total_samples:,} samples, {duration_ms/1000:.1f}s duration")
     
     return aac_index
 

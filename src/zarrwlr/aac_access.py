@@ -186,6 +186,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import os
 from typing import List, Tuple, Optional, Dict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -350,7 +351,7 @@ class DirectAACCodec:
                     
                     # Decode all frames using ADTS format processing
                     frame_generator = (frame for packet in adts_container.demux(audio_stream) 
-                                     for frame in packet.decode())
+                                    for frame in packet.decode())
                     
                     full_audio = _decode_audio_frames_to_numpy(frame_generator, np.int16)
                     adts_container.close()
@@ -360,9 +361,16 @@ class DirectAACCodec:
                 except Exception as adts_error:
                     logger.trace(f"ADTS approach failed: {adts_error}, trying direct parsing...")
                     
-                    # FALLBACK: Direct codec parsing
+                    # FALLBACK: Direct codec parsing WITH PROPER FLUSHING
                     packets = self.codec.parse(aac_bytes)
-                    logger.trace(f"Direct parsing: {len(packets)} packets from {len(aac_bytes)} bytes")
+                    
+                    # CRITICAL: Flush parser to get any remaining packets
+                    flush_packets = self.codec.parse(b'')
+                    if flush_packets:
+                        packets.extend(flush_packets)
+                        logger.trace(f"Direct parsing: +{len(flush_packets)} flush packets")
+                    
+                    logger.trace(f"Direct parsing: {len(packets)} total packets from {len(aac_bytes)} bytes")
                     
                     if not packets:
                         logger.trace("Direct parsing: No packets parsed")
@@ -371,6 +379,14 @@ class DirectAACCodec:
                     # Decode packets using common function
                     frame_generator = (frame for packet in packets for frame in self.codec.decode(packet))
                     full_audio = _decode_audio_frames_to_numpy(frame_generator, np.int16)
+                    
+                    # CRITICAL: Final decoder flush to get any remaining frames
+                    final_frames = self.codec.decode(None)
+                    if final_frames:
+                        final_audio = _decode_audio_frames_to_numpy(final_frames, np.int16)
+                        if len(final_audio) > 0:
+                            full_audio = np.concatenate([full_audio, final_audio])
+                            logger.trace(f"Direct parsing: +{len(final_audio)} samples from final flush")
                     
                     logger.trace(f"Direct approach: decoded {full_audio.shape[0]} samples")
                 
@@ -385,7 +401,7 @@ class DirectAACCodec:
             except Exception as e:
                 logger.error(f"AAC decode failed completely: {e}")
                 return np.array([], dtype=np.int16)
-    
+
     def close(self):
         """Clean up codec resources"""
         try:
@@ -624,13 +640,18 @@ def extract_audio_segment_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Arr
 
 def parallel_extract_audio_segments_aac(zarr_group: zarr.Group, audio_blob_array: zarr.Array, 
                                        segments: List[Tuple[int, int]], dtype=np.int16, 
-                                       max_workers: int = 4) -> List[np.ndarray]:
+                                       max_workers: int|None = None) -> List[np.ndarray]:
     """
     Ultra-fast parallel extraction using thread-local ADTS format processing
     
     Each worker thread gets its own DirectAACCodec for maximum performance.
     No shared state, no locking overhead between extractions.
     """
+    
+    # Use calculated workers if not specified
+    if max_workers is None:
+        max_workers = _calculate_optimal_workers()
+    
     logger.trace(f"ADTS format parallel extraction: {len(segments)} segments, {max_workers} workers")
     
     # Pre-check that we have the necessary data
@@ -887,6 +908,34 @@ def benchmark_direct_codec_performance(zarr_group: zarr.Group, audio_blob_array:
     logger.success(f"ADTS format benchmark: {avg_extraction_ms:.2f}ms avg, {successful_extractions}/{num_extractions} success")
     return results
 
+
+def _calculate_optimal_workers() -> int:
+    """
+    Calculate optimal number of workers based on CPU cores and config
+    
+    Returns:
+        int: Number of workers to use (minimum 1, maximum 16)
+    """
+    from .config import Config
+    
+    try:
+        # Get CPU core count
+        cpu_cores = os.cpu_count() or 4  # Fallback to 4 if detection fails
+        
+        # Calculate workers based on percentage
+        worker_percent = Config.aac_max_worker_core_percent
+        calculated_workers = max(1, int(cpu_cores * worker_percent / 100))
+        
+        # Reasonable bounds: 1-16 workers
+        optimal_workers = max(1, min(calculated_workers, 16))
+        
+        logger.trace(f"Worker calculation: {cpu_cores} cores × {worker_percent}% = {calculated_workers} -> {optimal_workers} workers")
+        
+        return optimal_workers
+        
+    except Exception as e:
+        logger.trace(f"Worker calculation failed: {e}, using fallback")
+        return 4  # Safe fallback
 
 # Compatibility aliases for seamless migration
 clear_performance_caches = clear_all_caches

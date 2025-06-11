@@ -171,7 +171,10 @@ class Config:
                             "aac_fallback_to_ffmpeg",
                             "aac_frame_analysis_method",
                             "aac_index_chunk_size",
-                            "aac_max_workers",
+                            "aac_index_target_chunk_kb",
+                            "aac_index_max_chunks",
+                            "aac_index_min_chunk_frames",
+                            "aac_max_worker_core_percent",
                             "aac_enable_parallel_analysis",
                             "aac_memory_limit_mb",
                             "aac_quality_preset"
@@ -189,8 +192,11 @@ class Config:
     aac_enable_pyav_native: bool = True             # Use PyAV for native AAC processing (faster)
     aac_fallback_to_ffmpeg: bool = True             # Fall back to ffmpeg if PyAV fails
     aac_frame_analysis_method: str = "pyav"         # Frame analysis method: "pyav" or "manual"
-    aac_index_chunk_size: int = 1000               # Frames per index chunk in Zarr
-    aac_max_workers: int = 4                       # Maximum workers for parallel processing
+    aac_index_chunk_size: int = 20000              # Frames per index chunk in Zarr
+    aac_index_target_chunk_kb: int = 512          # Target chunk size in KB
+    aac_index_max_chunks: int = 50                # Maximum number of chunks
+    aac_index_min_chunk_frames: int = 5000        # Minimum frames per chunk
+    aac_max_worker_core_percent: int = 80          # Percentage of CPU cores to use for AAC processing
     aac_enable_parallel_analysis: bool = True      # Enable parallel frame analysis
     aac_memory_limit_mb: int = 500                 # Memory limit for AAC processing in MB
     aac_quality_preset: str = "balanced"           # Quality preset: "fast", "balanced", "quality"
