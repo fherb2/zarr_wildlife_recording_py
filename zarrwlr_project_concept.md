@@ -33,11 +33,16 @@ Since the module provides quick access to small sample areas, you can use machin
 The Zarr system, currently in version 3, is used to store the audio data and meta information. The Zarr design was based on the well-known HDF5 database standard, but unlike HDF5, it is designed to support massive parallel access during writing and reading, which is why, unlike HDF5, it is also suitable for processing in high-performance clusters (HPC). Advantages:
 
 As with HDF5:
+
 - Zarr is suitable for the main data in array structures ranging from very small to very large, and thus for any type of sampled physical signals, including audio. An array is treated as a Numpy array at the API.
 - Zarr allows data to be structured into arbitrarily nested groups and metadata to be stored that can be linked to these groups or arrays.
+
 Difference to HDF5:
+
 - Unlike HDF5, the structure is not organised within a file, but in storages, which in the case of file systems also use the file system for structuring. This prevents global write locks, which would make massive parallel processing virtually impossible.
+
 Additionally:
+
 - Zarr databases can be created not only in the file system. Supported are: ‘local file systems, Zip files, remote stores via fsspec (S3, HTTP, etc.), and in-memory storage’.
 
 #### Zarr Inside This Project
