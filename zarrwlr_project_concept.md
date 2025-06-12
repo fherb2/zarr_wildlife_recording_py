@@ -70,10 +70,6 @@ In pipeline!
 - all amplitude bit-widths usable: works internal with floating point
 - In Pipeline: ultrasonic signals by sample rate reinterpreting behind the scences
 
+
+
 #### Metadaten
-
-...
-
-# License
-
-MIT License
