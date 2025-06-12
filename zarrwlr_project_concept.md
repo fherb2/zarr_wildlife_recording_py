@@ -6,6 +6,15 @@ The project aims to provide a Python package that allows audio recordings of ani
 
 Extending handling to image and video data is conceivable, but is not currently planned or in development. However, video data can already be used as a source if it contains audio data.
 
+### Machine learning use cases – Machine Data Analysis And Preparation Of Data For Machine Learning
+
+This project is for both:
+
+- Machine data analysis by using externel AI modules
+- Preparation of data for machine learning
+
+Since the module provides quick access to small sample areas, you can use machine learning for evaluation in a massively parallel manner. However, since you can also add any metadata, for example for labelling, you can use the database in exactly the same way to compile learning data for AI models. Thanks to its high performance, it is entirely possible to store this learning data dynamically during the AI learning process in reference form only for direct access by the learning algorithm. Without creating a physical copy. Also data augmentation on demand is quite possible.
+
 ## Overview of the package
 
 ### Audio Import
@@ -58,7 +67,7 @@ Note: Can be used for small array microphones until 8 channels. An update to use
 
 In pipeline!
 
-- fall back if any other method not possible
+- fall back if any other method not possible or sensefully
 - each column is a channel: unlimited array microphones can be used
 - using segmented entropy encoding to save memory but allow fast access to small sample ranges
 
@@ -71,5 +80,38 @@ In pipeline!
 - In Pipeline: ultrasonic signals by sample rate reinterpreting behind the scences
 
 
-
 #### Metadaten
+
+Meta data includes:
+
+- some basic technical data 
+- all found meta information inside the audio source file
+- all given meta information by the user
+
+So the API contains 3 data elements: A class instance of the basic technical data and two dictionaries of metadate from sound file and user.
+
+**Note:**
+
+- Basic technical data have a fixed contend defined by a data class.
+- The content of the audio file meta information depends of the audio files only. You have to explore the detailed structure and contents depending on your files befor you can use it programmatically.
+- The content of the user depeding meta information are defined and structured by the user only.
+
+### Audio Access
+
+#### Addressing And Reading Audio Data
+
+Important: Read the facts above about the structure of the data base and the 'mount point' for using the API. Also for access and addressing audio data inside the data base, all is depending on the 'mount point': The API knows only the flat structure at the mounting point.
+
+All sound files are named by a clean and unique number like a index. If you are looking for special audio data without information about this number, use meta information of all audio data (all numbers of audio data in the database on the mount point) to look and filter what you want. If you know the right audio number, so you can read samples by using a range relative to the start point. This package finds the right frames, decodes the content and, regardless of the frame or packaging structure used in the database, you get exactly the samples you want. The samples contain all channels and are provided as a Numpy array.
+
+### Audio Export
+
+In pipeline!
+
+Instead of a direct Numpy access to the sample data you can request file exports. Exports are possible into each format, what FFMPEG can encode. **But note:** Due to the wide variety of formats and containers, meta information is not automatically written to these files. Only the original file name is retained (if you give not a new name), extended if necessary by the sample area that was exported (without area: the entire original file samples are exported). All meta information required by the user must be added by the user themselves, if necessary.
+
+This means:
+
+So, it is not possible to recover the original files without user code. You can recover the samples of the original file if you choose the same format. But all metadata must be transferred to the file by the user. This may be a limitation for you. However, since it is possible to add user-dependent metadata to the sound data, it is generally unclear how to handle this collection during export. (Perhaps it would be possible to program some magic that would normally allow the meta information to be placed correctly in a programmatic way. But who would ensure that this would then actually work fully automatically in your case, as you expect?)
+
+**Note:** If you read the limmitation of adding meta data automatically, you should know, that the project aim is not to realize a good recovering of original sound files. The project aim is to cover audio data for fast (parallel) prozessing.
