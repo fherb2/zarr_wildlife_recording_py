@@ -80,7 +80,7 @@ In pipeline!
 - In Pipeline: ultrasonic signals by sample rate reinterpreting behind the scences
 
 
-#### Metadaten
+#### Metadata
 
 Meta data includes:
 
