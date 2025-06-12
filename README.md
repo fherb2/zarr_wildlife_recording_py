@@ -114,7 +114,7 @@ This means:
 
 So, it is not possible to recover the original files without user code. You can recover the samples of the original file if you choose the same format. But all metadata must be transferred to the file by the user. This may be a limitation for you. However, since it is possible to add user-dependent metadata to the sound data, it is generally unclear how to handle this collection during export. (Perhaps it would be possible to program some magic that would normally allow the meta information to be placed correctly in a programmatic way. But who would ensure that this would then actually work fully automatically in your case, as you expect?)
 
-**Note:** If you read the limitation of adding meta data automatically, you should know, that the project aim is not to realize a good recovering of original sound files. The project aim is to cover audio data for fast (parallel) prozessing.
+**Note:** If you read the limitation of adding meta data automatically, you should know, that the project aim is not to realize a good recovering of original sound files. The project aim is to cover audio data for fast (parallel) processing.
 
 ...
 
