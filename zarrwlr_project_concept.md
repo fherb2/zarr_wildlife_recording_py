@@ -19,7 +19,7 @@ Since the module provides quick access to small sample areas, you can use machin
 
 ### Audio Import
 
-- Most audio data can be imported directly (anything that FFMPEG can decode).
+- Most audio data can be imported directly (anything that FFMPEG can decode or a Numpy array of samples of one ore more channels.).
 - Metadata from the audio files is automatically transferred as dictionary.
 - Additional user metadata can be added as a dictionary.
 - Audio data is stored in relation to the source file. This preserves the link to external information that is not transferred as metadata during import.
