@@ -38,24 +38,23 @@ from .config import Config  # noqa: E402
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
 from .packagetypes import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
 
-logger.trace("Import done.")
+
 
 STD_TEMP_DIR = "/tmp"
 AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array" 
 
-def _check_ffmpeg_tools():
-    """Check if ffmpeg and ffprobe are installed and callable."""
-    logger.trace("'Check for ffmpeg-Tools' requested. Typical position for this during import.")
-    tools = ["ffmpeg", "ffprobe"]
-    logger.trace("Check avalability of ffmpeg and ffprobe tools during import of module...")
 
-    for tool in tools:
-        try:
-            subprocess.run([tool, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.error(f"Missing Command line tool {tool}. Please install ist.")
-            exit(1)
-    logger.success("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
+
+
+
+
+
+
+
+
+
+
+
 
 
 def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pathlib.Path|None = None) -> zarr.Group:
@@ -880,6 +879,22 @@ def test_aac_integration():
     except Exception as e:
         logger.error(f"AAC integration test failed: {e}")
         return False
+
+
+
+def _check_ffmpeg_tools():
+    """Check if ffmpeg and ffprobe are installed and callable."""
+    logger.trace("'Check for ffmpeg-Tools' requested. Typical position for this during import.")
+    tools = ["ffmpeg", "ffprobe"]
+    logger.trace("Check avalability of ffmpeg and ffprobe tools during import of module...")
+
+    for tool in tools:
+        try:
+            subprocess.run([tool, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logger.error(f"Missing Command line tool {tool}. Please install ist.")
+            exit(1)
+    logger.success("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
 
 
 logger.debug("Module loaded.")

@@ -136,47 +136,7 @@ class AudioCompression(Enum, metaclass=JSONEnumMeta):
     def __str__(self):
         return self.value
 
-class AudioFileBaseFeatures(RestrictedDict):
-    """Basic information about an audio file."""
 
-    FILENAME = "filename"
-    SIZE_BYTES = "size_bytes"
-    SH256 = "sha256"
-    HAS_AUDIO_STREAM = "has_audio_stream"
-    CONTAINER_FORMAT = "container_format"
-    NB_STREAMS = "nb_streams"
-    CODEC_PER_STREAM = "codec_per_stream"
-    SAMPLING_RATE_PER_STREAM = "sampling_rate_per_stream"
-    SAMPLE_FORMAT_PER_STREAM_AS_DTYPE = "sample_format_per_stream_as_dtype"
-    SAMPLE_FORMAT_PER_STREAM_IS_PLANAR = "sample_format_per_stream_is_planar"
-    CHANNELS_PER_STREAM = "channels_per_stream"
-    CODEC_COMPRESSION_KIND_PER_STREAM = "codec_compression_kind_per_stream"
-    
-    key_specs = [ 
-                # as: (key-name, data-type, default-value)
-                (FILENAME, str, None), 
-                (SIZE_BYTES, int, None),
-                (SH256, str, None),
-                (HAS_AUDIO_STREAM, bool, False),
-                (CONTAINER_FORMAT, str, None),
-                (NB_STREAMS, int, 0),
-                (CODEC_PER_STREAM, list, []),
-                (SAMPLING_RATE_PER_STREAM, list, []),
-                (SAMPLE_FORMAT_PER_STREAM_AS_DTYPE, list, []),
-                (SAMPLE_FORMAT_PER_STREAM_IS_PLANAR, list, []),
-                (CHANNELS_PER_STREAM, list, []),
-                (CODEC_COMPRESSION_KIND_PER_STREAM, list, [])
-            ]
-
-AudioSampleFormatMap = {
-        "u8": np.uint8,
-        "s16": np.int16,
-        "s32": np.int32,
-        "flt": np.float32,
-        "fltp": np.float32,  # Achtung: planar → evtl. reshapen!
-        "dbl": np.float64,
-        "dblp": np.float64,  # planar
-}
     
 class OriginalAudioBlobFeatures(RestrictedDict):
     """Parameters of the file-blob of the original audio data."""
