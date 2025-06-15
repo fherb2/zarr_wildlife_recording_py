@@ -13,7 +13,7 @@ import zarr
 from .utils import next_numeric_group_name, remove_zarr_group_recursive
 from .config import Config
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch
-from .types import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap
+from .types import AudioFileBaseFeatures, AudioCompressionBaseType, AudioSampleFormatMap
 
 # ------ Das ist neuer Code, teils von Claude.ai:
 from .flacbyteblob import FLACIndexer
@@ -85,20 +85,20 @@ def check_if_original_audio_group(group:zarr.Group):
         return
     raise ZarrGroupMismatch(f"The group '{group}' is not an original audio group.")
 
-def audio_codec_compression(codec_name: str) -> AudioCompression:
-    """Recognize principle AudioCompression from codec name."""
+def audio_codec_compression(codec_name: str) -> AudioCompressionBaseType:
+    """Recognize principle AudioCompressionBaseType from codec name."""
     if codec_name.startswith("pcm_"):
-        return AudioCompression.UNCOMPRESSED
+        return AudioCompressionBaseType.UNCOMPRESSED
     
     lossless_codecs = {"flac", "alac", "wavpack", "ape", "tak"}
     if codec_name in lossless_codecs:
-        return AudioCompression.LOSSLESS_COMPRESSED
+        return AudioCompressionBaseType.LOSSLESS_COMPRESSED
     
     lossy_codecs = {"mp3", "aac", "opus", "ogg", "ac3", "eac3", "wma"}
     if codec_name in lossy_codecs:
-        return AudioCompression.LOSSY_COMPRESSED
+        return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    return AudioCompression.UNKNOWN
+    return AudioCompressionBaseType.UNKNOWN
 
 def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatures:
     """Get basic information about an audio file."""

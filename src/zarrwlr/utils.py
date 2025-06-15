@@ -59,25 +59,19 @@ def remove_zarr_group_recursive(store, group_path: str):
     logger.trace(f"Remove zarr group '{group_path}' from store '{store}' requested.")
     
     try:
-        # Zarr v3 LocalStore hat keine keys() method
-        # Stattdessen verwende list() oder iteriere über Pfade
-        if hasattr(store, 'keys'):
-            # Zarr v2 style
-            keys_to_delete = [k for k in store.keys() if k == group_path or k.startswith(prefix)]
+        # Zarr v3 LocalStore (differs to Version 2)
+        import pathlib
+        store_path = pathlib.Path(store.root) if hasattr(store, 'root') else pathlib.Path(str(store))
+        group_full_path = store_path / group_path
+        
+        if group_full_path.exists():
+            import shutil
+            shutil.rmtree(group_full_path)
+            logger.trace(f"Zarr group '{group_path}' removed via filesystem")
+            return
         else:
-            # Zarr v3 LocalStore - verwende alternatives Vorgehen
-            import pathlib
-            store_path = pathlib.Path(store.root) if hasattr(store, 'root') else pathlib.Path(str(store))
-            group_full_path = store_path / group_path
-            
-            if group_full_path.exists():
-                import shutil
-                shutil.rmtree(group_full_path)
-                logger.trace(f"Zarr group '{group_path}' removed via filesystem")
-                return
-            else:
-                logger.trace(f"Zarr group '{group_path}' does not exist")
-                return
+            logger.trace(f"Zarr group '{group_path}' does not exist")
+            return
     except Exception as e:
         logger.warning(f"Error removing zarr group: {e}")
 

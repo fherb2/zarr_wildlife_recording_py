@@ -122,21 +122,6 @@ class JSONEnumMeta(type(Enum)):
         
         return cls
 
-class AudioCompression(Enum, metaclass=JSONEnumMeta):
-    """Shows the principle kind of compression (lossy, lossless, uncompressed)."""
-    def _generate_next_value_(name, start, count, last_values):
-        # is used by 'auto()'
-        return name  # -> set value automated to "UNCOMPRESSED", "LOSSLESS", ...
-
-    UNCOMPRESSED = auto()
-    LOSSLESS_COMPRESSED = auto()
-    LOSSY_COMPRESSED = auto()
-    UNKNOWN = auto()
-
-    def __str__(self):
-        return self.value
-
-
     
 class OriginalAudioBlobFeatures(RestrictedDict):
     """Parameters of the file-blob of the original audio data."""

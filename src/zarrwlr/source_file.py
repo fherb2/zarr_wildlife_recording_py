@@ -5,12 +5,37 @@ import pathlib
 import hashlib
 from typing import Dict, List, Any, Optional
 from .utils import safe_int_conversion, safe_float_conversion, can_ffmpeg_decode_codec
+from .audio_coding import TargetFormats
 
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
 logger.trace("Module loading...")
 
+# ############################################################
+# ############################################################
+#
+# Class AudioStreamParameters
+# ===========================
+# 
+# Main audio stream parameters for import processing
+#
+@dataclass
+class AudioStreamParameters:
+    """Main parameters of audio streams"""
+    index_of_stream_in_file: int
+    nb_channels: int = 0
+    sample_rate: int|None = None
+    sample_format: str|None = None
+    codec_name: str|None = None
+    nb_samples: int|None = None
+#
+# End of Class AudioStreamParameters
+#
+# ############################################################
+# ############################################################
+    
+    
 # ############################################################
 # ############################################################
 #
@@ -26,20 +51,10 @@ class FileBaseParameters:
     file_size_bytes: int|None = None
     file_sh256: str|None = None
     container_format_name: str|None = None
-    selected_audio_stream_list: list[int]|None = None
-    nb_channels_in_stream_list: list[int]|None = None
+    stream_parameters: list[AudioStreamParameters] = [] # sorted by the 'index_of_stream_in_file' parameter
+    selected_audio_streams: list[int] = [] # contains 'index_of_stream_in_file' parameters of selected streams
     total_nb_of_channels = 0
-    sample_rate: int|None = None
-    sample_format: str|None = None
-    codec_name: str|None = None
-    nb_samples: int|None = None 
-    
-    def __post_init__(self):
-        if self.audio_stream_list is None:
-            self.audio_stream_list = []
-        if self.nb_channels_in_stream_list is None:
-            self.nb_channels_in_stream_list = []
-
+    total_nb_of_channels_to_import = 0
 #
 # End of Class FileBaseParameters
 #
@@ -73,7 +88,7 @@ class FileParameter:
     # Initialization part
     # -------------------
     #
-    def __init__(self, file_path: str | pathlib.Path, user_meta: dict = {}, target_format: str = 'flac', audio_stream_selection_list: int|list[int] = [0]):
+    def __init__(self, file_path: str | pathlib.Path, user_meta: dict = {}, target_format: str = 'flac', selected_audio_streams: int|list[int] = []):
         """
         Initialisiert FileParameter mit vollständiger ffprobe-Analyse
         
@@ -101,13 +116,12 @@ class FileParameter:
         if not self._validate_and_save_target_format(target_format):
             self._target_format:str = ""
         
-        if not self._validate_and_save_audio_stream_selection_list(audio_stream_selection_list):
-            self._base_parameter.selected_audio_stream_list = [0]
+        if not self._validate_and_save_selected_audio_streams(selected_audio_streams):
+            self._base_parameter.selected_audio_streams = []
         logger.trace("Step 1 Done: Validate arguments.")
         
         logger.trace("Step 2: Parameter initialization...")
-        # Initialization of other parameters
-        self._base_parameter.selected_audio_stream_list = [0]
+        # Initialize other parameters
         self._can_be_imported = False # Can not be True until analyzein was run.
         
         # Initialisierung der Haupt-Datenstrukturen
@@ -135,7 +149,7 @@ class FileParameter:
         
         # do a first analysis by using default configuration
         logger.trace("Step 5: Base analysation of parameters...")
-        self._analyze(self)
+        self._analyze()
         logger.trace("Step 5 done: Base analysation of parameters. First report can be requested.")
     
     def _validate_and_save_user_meta(self, user_meta: dict|None):
@@ -148,17 +162,20 @@ class FileParameter:
         return False # value not set
 
     def _validate_and_save_target_format(self, target_format:str|None):
-        if not isinstance(target_format, str|None):
-            raise ValueError("Target format must be a string value.")
+        if not isinstance(target_format, (str, type(None))):
+            raise ValueError("Target format must be a string value or None.")
+
         if target_format is not None:
-            ### additional tests needed!!!
-            # TODO!
-            ### ##########################
-            self._target_format = target_format
-            return True # value set
-        return False # value not set
+            try:
+                TargetFormats.from_string_or_enum(target_format)
+                self._target_format = target_format
+                return True
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Invalid target format '{target_format}': {e}")
+        
+        return False
     
-    def _validate_and_save_audio_stream_selection_list(self, audio_stream_selection_list:int|list[int]|None):
+    def _validate_and_save_selected_audio_streams(self, audio_stream_selection_list:int|list[int]|None):
         if audio_stream_selection_list is None:
             return False # value not set
         if isinstance(audio_stream_selection_list, int):
@@ -176,7 +193,7 @@ class FileParameter:
             raise ValueError("More than exactly one selected audio stream not yet supported. But, planned for next versions.")
         #
         # ##################################################
-        self._base_parameter.selected_audio_stream_list = audio_stream_selection_list
+        self._base_parameter.selected_audio_streams = audio_stream_selection_list
         return True # value set
     
     def _extract_file_data(self):
@@ -245,6 +262,7 @@ class FileParameter:
         logger.trace(f"Extracting container information for file '{file}' requested.")
         format_info = ffprobe_data.get("format", {})
         
+        self._base_parameter.container_format_name = format_info.get("format_name")
         self._container = {
             # Basis Container-Informationen
             "format_name": format_info.get("format_name"),
@@ -278,11 +296,9 @@ class FileParameter:
         for stream_data in all_streams:
             # Trennung nach Audio und Nicht-Audio mit spezifischen Funktionen
             if stream_data.get("codec_type") == "audio":
-                stream_info = self._create_audio_stream_info_dict(stream_data, file)
-                self._audio_streams.append(stream_info)
+                self._create_audio_stream_info_dict(stream_data, file)
             else:
-                stream_info = self._create_other_stream_info_dict(stream_data, file)
-                self._other_streams.append(stream_info)
+                self._create_other_stream_info_dict(stream_data, file)
                 
         # Sortierung nach 'index' parameter:
         self._audio_streams.sort(key=lambda x: x["index"] if x["index"] is not None else 999)
@@ -290,7 +306,7 @@ class FileParameter:
     
     def _create_audio_stream_info_dict(self, stream_data: dict, file: str) -> dict:
         """
-        Erstellt ein standardisiertes Audio-Stream-Info Dictionary
+        Erstellt ein standardisiertes Audio-Stream-Info Dictionary und füllt die Base-Parameter
         
         Args:
             stream_data: Rohe Audio-Stream-Daten von ffprobe
@@ -300,7 +316,7 @@ class FileParameter:
             Strukturiertes Audio-Stream-Info Dictionary
         """
         logger.trace(f"Extracting audio stream information of file '{file}'.")
-        return {
+        self._audio_streams.append( {
             # Stream-Identifikation
             "index": safe_int_conversion(stream_data.get("index")),  # Sollte immer Integer sein
             "id": stream_data.get("id"),  # data type can differ from container format to container format
@@ -329,8 +345,17 @@ class FileParameter:
             
             # Stream-Eigenschaften
             "disposition": stream_data.get("disposition", {})
-        }
-    
+        } )
+        self._base_parameter.stream_parameters.append(
+                    AudioStreamParameters(index_of_stream_in_file=safe_int_conversion(stream_data.get("index")),
+                                          nb_channels=safe_int_conversion(stream_data.get("channels")),
+                                          sample_rate=safe_int_conversion(stream_data.get("sample_rate")),
+                                          sample_format=stream_data.get("sample_fmt"),
+                                          codec_name=stream_data.get("codec_name"),
+                                          nb_samples=self._calculate_total_samples(self._audio_streams[-1])
+                                          ))
+        self._base_parameter.total_nb_of_channels += safe_int_conversion(stream_data.get("channels"))
+
     def _create_other_stream_info_dict(self, stream_data: dict, file: str) -> dict:
         """
         Erstellt ein standardisiertes Nicht-Audio-Stream-Info Dictionary
@@ -343,7 +368,7 @@ class FileParameter:
             Strukturiertes Nicht-Audio-Stream-Info Dictionary
         """
         logger.trace(f"Extracting non-audio stream information of file '{file}'.")
-        return {
+        self._other_streams.append( {
             # Stream-Identifikation
             "index": safe_int_conversion(stream_data.get("index")),  # Sollte immer Integer sein
             "id": stream_data.get("id"),  # data type can differ from container format to container format
@@ -364,7 +389,7 @@ class FileParameter:
             
             # Stream-Eigenschaften
             "disposition": stream_data.get("disposition", {})
-        }
+        } )
     
     def _extract_general_meta(self, ffprobe_data: dict, file: str):
         """
@@ -449,166 +474,7 @@ class FileParameter:
                 for key in processed_other_keys:
                     stream.pop(key, None)
      
-    #
-    # Ende of initialization part
-    #               
-    # ################################################
-    
-
-    # ################################################
-    #
-    # Analyzing part
-    # --------------
-    #
-    def _analyse(self, target_format: str|None = None, audio_stream_selection_list: int|list[int]|None = None) -> bool:
-        """
-        Führt Import-Analyse durch und bestimmt Import-Bereitschaft
-        
-        Analysiert die relevanten Daten der übergebenen Audio-Streams:
-            - entnimmt die relevanten Daten des Audio-Streams mit dem kleinsten Index
-              (gewährleistet durch die Sortierung in '_extract_stream_info()')
-              - return False, wenn nicht alle Daten verfügbar sind
-            - falls mehr als nur ein Index übergeben wurde:
-                - vergleiche, ob die anderen Stream identische Parameter haben; Ausnahme: Kanalzahl
-                - return False, wenn Vergleich über alle Streams hinweg mindestens einmal nicht erfolgreich
-            alles ok: 
-                - erstelle self._base_parameter aus den relevanten Daten
-                - return True
-        
-        Args:
-            audio_stream_selection_list: Stream-Index(e) für die Analyse (echte ffprobe-Indizes)
-            
-        Returns:
-            True wenn Import möglich, False sonst
-        """
-        logger.trace(f"Import analysis requested for audio stream indices: {audio_stream_selection_list}")
-        self._can_be_imported = True
-        
-        if target_format is not None:
-            self._validate_and_save_target_format(target_format)
-        
-        if audio_stream_selection_list is not None:
-            self._validate_and_save_audio_stream_selection_list(audio_stream_selection_list)
-        
-        # check if selected audio stream exist in file
-        known_indices = [stream["index"] for stream in self._audio_streams if stream["index"] is not None]
-        for index in self._base_parameter.selected_audio_stream_list:
-            if index not in known_indices:
-                self._can_be_imported = False
-                logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing given Index '{index}' in Audio indices of file. Audio indices of file: {known_indices}")
-        
-        if not self._can_be_imported:
-            logger.trace("Break audio file analysis.")
-            return False
-        
-        # read out parameters of streams and if more than one stream: compare if all
-        # selected streams are compatible
-        self._base_parameter.total_nb_of_channels = 0
-        self._base_parameter.nb_channels_in_stream_list = []
-        is_first_stream = True
-        for index in self._base_parameter.selected_audio_stream_list:
-            stream = next((d for d in self._audio_streams if d["index"] == index), None)
-            if stream is None:
-                self._can_be_imported = False
-                logger.warning(f"Audio file '{str(self._base_parameter.file.name)}': Could not find audio stream with file index {index}")
-                logger.trace("Break audio file analysis.")
-                break
-            
-            if is_first_stream:
-                # initialize all values
-                is_first_stream = False # reset the flag
-                
-                self._base_parameter.sample_rate = stream.get("sample_rate")
-                self._base_parameter.sample_format = stream.get("sample_fmt")
-                self._base_parameter.codec_name = stream.get("codec_name")
-                self._base_parameter.nb_channels_in_stream_list.append(stream.get("channels"))
-                if    self._base_parameter.sample_rate is None \
-                   or self._base_parameter.sample_rate < 1:
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing required parameter 'sample_rate' in audio stream with index {index}.")
-                    self._can_be_imported = False
-                    break
-                if self._base_parameter.sample_format is None:
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing required parameter 'sample_fmt' in audio stream with index {index}.")
-                    self._can_be_imported = False
-                    break
-                if self._base_parameter.codec_name is None:
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing required parameter 'codec_name' in audio stream with index {index}.")
-                    self._can_be_imported = False
-                    break
-                if    self._base_parameter.nb_channels_in_stream_list[-1] is None \
-                   or self._base_parameter.nb_channels_in_stream_list[-1] < 1:
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing required parameter 'channels' in audio stream with index {index}.")
-                    self._can_be_imported = False
-                    break
-                self._base_parameter.total_nb_of_channels += self._base_parameter.nb_channels_in_stream_list[-1]
-
-                # since there is no standard parameter for sample count, we have to calculate
-                self._base_parameter.nb_samples = self._calculate_total_samples(index)
-                if    self._base_parameter.nb_samples is None \
-                   or self._base_parameter.nb_samples < 1:
-                    self._can_be_imported = False
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Could not calculate total samples for stream {index}.")
-                    break
-            else:
-                # compare with first stream (außer Kanalzahl)
-                if self._base_parameter.sample_rate != stream.get("sample_rate"):
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Sample rate of audio stream with index '{index}' differs to the value of stream '{self._base_parameter.audio_stream_list[0]}'.")
-                    self._can_be_imported = False
-                    break
-                if self._base_parameter.sample_format != stream.get("sample_fmt"):
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Sample format of audio stream with index '{index}' differs to the value of stream '{self._base_parameter.audio_stream_list[0]}'.")
-                    self._can_be_imported = False
-                    break
-                if self._base_parameter.codec_name != stream.get("codec_name"):
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Codec name of audio stream with index '{index}' differs to the value of stream '{self._base_parameter.audio_stream_list[0]}'.")
-                    self._can_be_imported = False
-                    break
-                self._base_parameter.nb_channels_in_stream_list.append(stream.get("channels"))
-                if    self._base_parameter.nb_channels_in_stream_list[-1] is None \
-                   or self._base_parameter.nb_channels_in_stream_list[-1] < 1:
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing required parameter 'channels' in audio stream with index {index}.")
-                    self._can_be_imported = False
-                    break
-                self._base_parameter.total_nb_of_channels += self._base_parameter.nb_channels_in_stream_list[-1]
-
-                # since there is no standard parameter for sample count, we have to calculate
-                if self._base_parameter.nb_samples != self._calculate_total_samples(index):
-                    self._can_be_imported = False
-                    logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Could not calculate total samples for stream {index}.")
-                    break
-        if not self._can_be_imported:
-            logger.trace("Break audio file analysis.")
-            return False
-        
-        if not can_ffmpeg_decode_codec(self._base_parameter.codec_name):
-            self._can_be_imported = False
-            logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Codec '{self._base_parameter.codec_name}' is not decodable by FFMPEG. Check your FFMPEG version and if a newer version of FFMPEG can decode this. Or use an external tool to decode the file into an intermediate codec before import. In such case, use a lossless codec to maintain sound quality.")       
-
-        # Check compatibility to requested target format
-        target_format
-
-
-        logger.trace(   f"Audio file '{str(self._base_parameter.file.name)}' analysis results: "
-                        f"file path={str(self._base_parameter.file.parent)}, "
-                        f"file size={self._base_parameter.file_size_bytes} bytes, "
-                        f"file hash={self._base_parameter.file_sh256}, "
-                        f"container format name={self._base_parameter.container_format_name}, "
-                        f"selected audio streams for import (indices):{self._base_parameter.selected_audio_stream_list}, "
-                        f"number of channels per selected stream={self._base_parameter.nb_channels_in_stream_list}, "
-                        f"total number of selected audio channels={self._base_parameter.total_nb_of_channels}, "
-                        f"sample rate={self._base_parameter.sample_rate}, "
-                        f"codec name={self._base_parameter.codec_name}, "
-                        f"samples={self._base_parameter.nb_samples}, ")
-                        f"Ready for import={self._can_be_imported}"
-
-        if self._can_be_imported:
-            logger.success(f"Audio file '{str(self._base_parameter.file.name)}': ✅ Import analysis successful for {len(audio_stream_selection_list)} audio stream(s) of file '{str(self._base_parameter.file.name)}'. It is very likely that the file can be imported without errors.")
-            
-        
-        return self._can_be_imported
-    
-    
-    def _calculate_total_samples(self, audio_stream_index: int = 0) -> Optional[int]:
+    def _calculate_total_samples(self, stream:dict) -> Optional[int]:
         """
         Berechnet die Gesamtzahl der Samples in einem Audio-Stream. Nutzt dabei die best möglichen
         Methoden, um aus den Metadaten die Samplezahl zu berechnen. In absoluten Ausnahmefällen ist
@@ -621,11 +487,7 @@ class FileParameter:
         Returns:
             Anzahl Samples oder None wenn Berechnung nicht möglich
         """
-        if audio_stream_index >= len(self._audio_streams):
-            return None
-        
-        stream = self._audio_streams[audio_stream_index]
-        
+ 
         # METHODE 1: duration_ts (BESTE - direkter Sample-Count)
         duration_ts = stream.get("duration_ts")
         time_base = stream.get("time_base")
@@ -653,22 +515,118 @@ class FileParameter:
             return int(container_duration * sample_rate)
         
         return None
+    #
+    # Ende of initialization part
+    #               
+    # ################################################
     
-    def _find_audio_stream_by_file_index(self, file_stream_index: int) -> Optional[int]:
+
+    # ################################################
+    #
+    # Analyzing part
+    # --------------
+    #
+    def _analyze(self, target_format: str|None = None, audio_stream_selection_list: int|list[int]|None = None) -> bool:
         """
-        Findet den Array-Index eines Audio-Streams basierend auf dem echten Stream-Index
+        Führt Import-Analyse durch und bestimmt Import-Bereitschaft
+        
+        Analysiert die relevanten Daten der übergebenen Audio-Streams:
+            - entnimmt die relevanten Daten des Audio-Streams mit dem kleinsten Index
+              (gewährleistet durch die Sortierung in '_extract_stream_info()')
+              - return False, wenn nicht alle Daten verfügbar sind
+            - falls mehr als nur ein Index übergeben wurde:
+                - vergleiche, ob die anderen Stream identische Parameter haben; Ausnahme: Kanalzahl
+                - return False, wenn Vergleich über alle Streams hinweg mindestens einmal nicht erfolgreich
+            alles ok: 
+                - erstelle self._base_parameter aus den relevanten Daten
+                - return True
         
         Args:
-            file_stream_index: Echter Stream-Index aus ffprobe
+            audio_stream_selection_list: Stream-Index(e) für die Analyse (echte ffprobe-Indizes)
             
         Returns:
-            Array-Index oder None wenn nicht gefunden
+            True wenn Import möglich, False sonst
         """
-        for i, stream in enumerate(self._audio_streams):
-            if stream.get("index") == file_stream_index:
-                return i
-        return None
+        logger.trace(f"Import analysis requested for audio stream indices: {audio_stream_selection_list}")
+        self._can_be_imported = True
+        
+        if target_format is not None:
+            self._validate_and_save_target_format(target_format)
+        
+        if audio_stream_selection_list is not None:
+            self._validate_and_save_selected_audio_streams(audio_stream_selection_list)
+        
+        # check if selected audio stream exist in file
+        known_indices = [stream_parameter.index_of_stream_in_file for stream_parameter in self._base_parameter.stream_parameters]
+        for stream_index in self._base_parameter.selected_audio_streams:
+            if stream_index not in known_indices:
+                self._can_be_imported = False
+                logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing given audio stream index '{stream_index}' in Audio indices of file. Audio indices of file: {known_indices}")
+         
+        if not self._can_be_imported:
+            logger.trace("Break audio file analysis.")
+            return False
+        
+        # get list-index of selected audio stream parameters (not: stream index!)
+        selected_stream_parameter_indices = []
+        for i in range(len(self._base_parameter.stream_parameters)):
+            if self._base_parameter.stream_parameters[i].index_of_stream_in_file in self._base_parameter.selected_audio_streams:
+                selected_stream_parameter_indices.append(i)
+        
+        # count the total channels needed for import:
+        self._base_parameter.total_nb_of_channels_to_import = 0
+        for i in selected_stream_parameter_indices:
+            if isinstance(self._base_parameter.stream_parameters[i].nb_channels, int):
+                self._base_parameter.total_nb_of_channels_to_import += self._base_parameter.stream_parameters[i].nb_channels
+            else:
+                logger.error(f"Missing number of channels in requested audio stream {self._base_parameter.stream_parameters[i].index_of_stream_in_file}")
+                self._can_be_imported = False
+                break           
+                   
+        
+        # check compatibility if more than one stream:
+        if len(selected_stream_parameter_indices) > 1:
+            reference_stream_idx = selected_stream_parameter_indices[0]
+            for i in selected_stream_parameter_indices[1:]:  # Statt: if i > 1
+                if self._base_parameter.stream_parameters[reference_stream_idx].nb_samples != self._base_parameter.stream_parameters[i].nb_samples:
+                    logger.error("Number of samples in streams different. Can not import all channels as one record.")
+                    self._can_be_imported = False
+                    break                    
+                if self._base_parameter.stream_parameters[reference_stream_idx].sample_rate != self._base_parameter.stream_parameters[i].sample_rate:
+                    logger.error("Sampling rate in streams different. Can not import all channels as one record.")
+                    self._can_be_imported = False
+                    break
+
+        # check if codec can be encoded by ffmpeg
+        for i in selected_stream_parameter_indices:
+            codec_name = self._base_parameter.stream_parameters[i].codec_name
+            if not can_ffmpeg_decode_codec(codec_name):
+                self._can_be_imported = False
+                logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Codec '{codec_name}' is not decodable by FFMPEG.")
+                break
+
+
+        if not self._can_be_imported:
+            logger.trace("Break audio file analysis.")
+            return False
+        
+        logger.trace(   f"Audio file '{str(self._base_parameter.file.name)}' analysis results: "
+                        f"file path={str(self._base_parameter.file.parent)}, "
+                        f"file size={self._base_parameter.file_size_bytes} bytes, "
+                        f"file hash={self._base_parameter.file_sh256}, "
+                        f"container format name={self._base_parameter.container_format_name}, "
+                        f"selected audio streams for import (indices):{self._base_parameter.selected_audio_streams}, "
+                        f"total number of selected audio channels={self._base_parameter.total_nb_of_channels_to_import}, "
+                        f"sample rate={self._base_parameter.stream_parameters[0].sample_rate/1000}kS/s, "
+                        f"samples={self._base_parameter.stream_parameters[0].nb_samples/1.0e6}MS, "
+                        f"Ready for import={self._can_be_imported}")
+
+        if self._can_be_imported:
+            logger.success(f"Audio file '{str(self._base_parameter.file.name)}': ✅ Import analysis successful. It is very likely that the file can be imported without errors.")
+            
+        return self._can_be_imported
     
+    #
     # End of analyzing part
     #
     # ##############################################################
@@ -701,6 +659,13 @@ class FileParameter:
         return [stream.copy() for stream in self._audio_streams]
     
     @property
+    def selected_audio_streams(self) -> List[dict]:
+        """List of parameters of pre-selected audio streams."""
+        if len(self._base_parameter.selected_audio_streams) < 1:
+            return {}
+        return [stream_parameter for stream_parameter in self._base_parameter.stream_parameters if stream_parameter.index_of_stream_in_file in self._base_parameter.selected_audio_streams]
+    
+    @property
     def other_streams(self) -> List[dict]:
         """List of parameters of non-audio streams."""
         return [stream.copy() for stream in self._other_streams]
@@ -718,8 +683,7 @@ class FileParameter:
     @user_meta.setter
     def user_meta(self, user_meta:dict):
         self._validate_and_save_user_meta(user_meta)
-        logger.trace("user_meta data set. Rerun analyzer.")
-        self._analyse()
+        logger.trace("user_meta data set.")
        
     @property
     def target_format(self) -> str:
@@ -728,27 +692,27 @@ class FileParameter:
     @target_format.setter 
     def target_format(self, target_format:str):
         self._validate_and_save_target_format(target_format)
-        logger.trace("target_format set. Rerun analyzer.")
+        logger.trace("target_format set. Re-run analyzer.")
         self._analyse()
     
     @property
     def audio_stream_selection_list(self) -> list[int]:
         """Selected audio streams in order to import"""
-        return self._selected_audio_stream_list.copy()
+        return self._base_parameter.selected_audio_streams.copy()
     
     @audio_stream_selection_list.setter
     def audio_stream_selection_list(self, audio_stream_selection_list:list[int]):
-        self._validate_and_save_audio_stream_selection_list(audio_stream_selection_list)
-        logger.trace("audio_stream_selection_list set. Rerun analyzer.")
+        self._validate_and_save_selected_audio_streams(audio_stream_selection_list)
+        logger.trace("audio_stream_selection_list set. Re-run analyzer.")
         self._analyse()
     
     @property
-    def can_be_imported(self) -> bool:
+    def (self) -> bool:
         """Flag if the import is permitted.
         
         Analyzing must have done with positive result.
         """
-        return self._can_be_imported.copy() # True, if completed analysis was positive
+        return self._can_be_imported # True, if completed analysis was positive
 
     @property
     def has_audio(self) -> bool:
@@ -756,7 +720,7 @@ class FileParameter:
         return len(self._audio_streams) > 0
     
     @property
-    def number_of_audio_stream(self) -> int:
+    def number_of_audio_streams(self) -> int:
         """Gibt die Anzahl der Audio-Streams zurück"""
         return len(self._audio_streams)
     
@@ -766,8 +730,8 @@ class FileParameter:
     # User methods
     #
     
-    def analyze(self, audio_stream_selection_list: int|list[int]|None = None) -> bool:
-        return self._analyse(self, audio_stream_selection_list)
+    def analyze(self, target_format: str|None = None, audio_stream_selection_list: int|list[int]|None = None) -> bool:
+        return self._analyze(target_format, audio_stream_selection_list)
     # 
     # End of user methods
     #

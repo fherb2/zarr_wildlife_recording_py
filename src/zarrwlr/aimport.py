@@ -36,28 +36,14 @@ from .aac_access import (
 from .utils import check_ffmpeg_tools, next_numeric_group_name, remove_zarr_group_recursive, safe_int_conversion  # noqa: E402
 from .config import Config  # noqa: E402
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
-from .packagetypes import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
-
-
+#from .packagetypes import AudioFileBaseFeatures, AudioSampleFormatMap  # noqa: E402
+from .audio_coding import AudioCompressionBaseType, audio_codec_compression
 
 STD_TEMP_DIR = "/tmp"
 AUDIO_DATA_BLOB_ARRAY_NAME = "audio_data_blob_array" 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pathlib.Path|None = None) -> zarr.Group:
+def init_original_audio_group(store_path: str|pathlib.Path, group_path: str|pathlib.Path|None = None) -> zarr.Group:
     """
     Erstellt eine neue Original-Audio-Gruppe im Zarr-Store oder prüft eine existierende.
     
@@ -77,7 +63,7 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
     store = zarr.storage.LocalStore(str(store_path))
     root = zarr.open_group(store, mode='a')
     
-    def initialize_group(grp: zarr.Group):
+    def _initialize_new_original_audio_group(grp: zarr.Group):
         logger.trace("Initialize Zarr group containing all original audio imports...")
         grp.attrs["magic_id"] = Config.original_audio_group_magic_id
         grp.attrs["version"] = Config.original_audio_group_version
@@ -100,7 +86,7 @@ def create_original_audio_group(store_path: str|pathlib.Path, group_path: str|pa
             try:
                 group = root.create_group(zarr_group_path)
                 created = True
-                initialize_group(group)
+                _initialize_new_original_audio_group(group)
             except Exception:
                 if created:
                     remove_zarr_group_recursive(root.store, group.path)
@@ -140,33 +126,6 @@ def check_if_original_audio_group(group:zarr.Group):
         return
     raise ZarrGroupMismatch(f"The group '{group}' is not an original audio group.")
 
-def audio_codec_compression(codec_name: str) -> AudioCompression:
-    """
-    Erkennt den Kompressionstyp anhand des Codec-Namens.
-    
-    Args:
-        codec_name: Name des Audio-Codecs
-        
-    Returns:
-        AudioCompression: Kompressionstyp (UNCOMPRESSED, LOSSLESS_COMPRESSED, LOSSY_COMPRESSED, UNKNOWN)
-    """
-    logger.trace(f"'Audio codec compression' with {codec_name=} requested.")
-    if codec_name.startswith("pcm_"):
-        logger.debug(f"Audio compression of {codec_name} checked. Is: uncompressed.")
-        return AudioCompression.UNCOMPRESSED
-    
-    lossless_codecs = {"flac", "alac", "wavpack", "ape", "tak"}
-    if codec_name in lossless_codecs:
-        logger.debug(f"Audio compression of {codec_name} checked. Is: lossless compressed.")
-        return AudioCompression.LOSSLESS_COMPRESSED
-    
-    lossy_codecs = {"mp3", "aac", "opus", "ogg", "ac3", "eac3", "wma"}
-    if codec_name in lossy_codecs:
-        logger.debug(f"Audio compression of {codec_name} checked. Is: lossy compressed.")
-        return AudioCompression.LOSSY_COMPRESSED
-    
-    logger.error(f"Audio compression of {codec_name} checked. Is not an implemented code to recognize the type. If necessary to recognize this code, it has to be added to the module function 'audio_codec_compression()'.")
-    return AudioCompression.UNKNOWN
 
 def safe_get_sample_format_dtype(sample_fmt, fallback_fmt="s16"):
     """Safe conversion of sample formats to dtype"""
@@ -178,140 +137,140 @@ def safe_get_sample_format_dtype(sample_fmt, fallback_fmt="s16"):
         return AudioSampleFormatMap[fallback_fmt]
 
 
-def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatures:
-    """
-    Ermittelt grundlegende Informationen über eine Audiodatei.
+# def base_features_from_audio_file(file: str|pathlib.Path) -> AudioFileBaseFeatures:
+#     """
+#     Ermittelt grundlegende Informationen über eine Audiodatei.
     
-    Args:
-        file: Pfad zur Audiodatei
+#     Args:
+#         file: Pfad zur Audiodatei
         
-    Returns:
-        AudioFileBaseFeatures: Objekt mit Basisinformationen über die Audiodatei
+#     Returns:
+#         AudioFileBaseFeatures: Objekt mit Basisinformationen über die Audiodatei
         
-    Raises:
-        FileNotFoundError: Wenn die Datei nicht gefunden wird
-    """
-    logger.trace(f"'Base features from audio files' with file '{file}' requested.")
-    file_path = pathlib.Path(file)
+#     Raises:
+#         FileNotFoundError: Wenn die Datei nicht gefunden wird
+#     """
+#     logger.trace(f"'Base features from audio files' with file '{file}' requested.")
+#     file_path = pathlib.Path(file)
 
-    if not file_path.is_file():
-        logger.error(f"File not found: {file_path}")
-        raise FileNotFoundError(f"File not found: {file_path}")
+#     if not file_path.is_file():
+#         logger.error(f"File not found: {file_path}")
+#         raise FileNotFoundError(f"File not found: {file_path}")
     
-    # initialize return value
-    logger.trace("Load audio files base features...")
-    base_features = AudioFileBaseFeatures()
+#     # initialize return value
+#     logger.trace("Load audio files base features...")
+#     base_features = AudioFileBaseFeatures()
 
-    # name and size
-    logger.trace(f"... and set 'base_features.FILENAME' with '{file_path.name}' and 'base_features.SIZE_BYTES' with '{file_path.stat().st_size}'.")
-    base_features[base_features.FILENAME]   = file_path.name
-    base_features[base_features.SIZE_BYTES] = file_path.stat().st_size
+#     # name and size
+#     logger.trace(f"... and set 'base_features.FILENAME' with '{file_path.name}' and 'base_features.SIZE_BYTES' with '{file_path.stat().st_size}'.")
+#     base_features[base_features.FILENAME]   = file_path.name
+#     base_features[base_features.SIZE_BYTES] = file_path.stat().st_size
 
-    # Container und Codec mit ffprobe (aus ffmpeg)
-    try:
-        cmd = [
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "a",  # Wählt alle Audiostreams aus
-            "-show_entries", "format=format_name",  # Format-Information
-            "-show_entries", "stream=index,codec_name,sample_rate,sample_fmt,channels",  # Stream-Information mit index
-            "-of", "json",
-            str(file_path)
-        ]
-        logger.trace(f"Read meta data from file '{str(file_path)}' by using: '{cmd}'.")
-        result = subprocess.run(cmd,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                check=True,
-                                text=True)
-        metadata = json.loads(result.stdout)
-        logger.trace(f"Loaded metadata from json imported: '{metadata=}'")
-        base_features[base_features.CONTAINER_FORMAT] = \
-                                        metadata.get("format", {}).get("format_name", "unknown")
+#     # Container und Codec mit ffprobe (aus ffmpeg)
+#     try:
+#         cmd = [
+#             "ffprobe",
+#             "-v", "error",
+#             "-select_streams", "a",  # Wählt alle Audiostreams aus
+#             "-show_entries", "format=format_name",  # Format-Information
+#             "-show_entries", "stream=index,codec_name,sample_rate,sample_fmt,channels",  # Stream-Information mit index
+#             "-of", "json",
+#             str(file_path)
+#         ]
+#         logger.trace(f"Read meta data from file '{str(file_path)}' by using: '{cmd}'.")
+#         result = subprocess.run(cmd,
+#                                 stdout=subprocess.PIPE,
+#                                 stderr=subprocess.PIPE,
+#                                 check=True,
+#                                 text=True)
+#         metadata = json.loads(result.stdout)
+#         logger.trace(f"Loaded metadata from json imported: '{metadata=}'")
+#         base_features[base_features.CONTAINER_FORMAT] = \
+#                                         metadata.get("format", {}).get("format_name", "unknown")
         
-        streams                                       = metadata.get("streams", [])
+#         streams                                       = metadata.get("streams", [])
 
-        base_features[base_features.NB_STREAMS]       = len(streams)
-        logger.trace(f"Meta data: Number of audio streams: {base_features[base_features.NB_STREAMS]}.")
-        base_features[base_features.HAS_AUDIO_STREAM] = len(streams) > 0
+#         base_features[base_features.NB_STREAMS]       = len(streams)
+#         logger.trace(f"Meta data: Number of audio streams: {base_features[base_features.NB_STREAMS]}.")
+#         base_features[base_features.HAS_AUDIO_STREAM] = len(streams) > 0
 
-        if not base_features[base_features.HAS_AUDIO_STREAM]:
-            logger.trace("Meta data: No audio streams in data. This can be a problem later.")
+#         if not base_features[base_features.HAS_AUDIO_STREAM]:
+#             logger.trace("Meta data: No audio streams in data. This can be a problem later.")
 
-        try:
-            # Codec-Namen (bereits sicher)
-            logger.trace("Try to set base_features[base_features.CODEC_PER_STREAM]...")
-            base_features[base_features.CODEC_PER_STREAM] = list({
-                stream.get("codec_name", "unknown") for stream in streams
-            })
-            logger.trace("Done.")
+#         try:
+#             # Codec-Namen (bereits sicher)
+#             logger.trace("Try to set base_features[base_features.CODEC_PER_STREAM]...")
+#             base_features[base_features.CODEC_PER_STREAM] = list({
+#                 stream.get("codec_name", "unknown") for stream in streams
+#             })
+#             logger.trace("Done.")
             
-            # Sample-Raten mit sicherer int-Konvertierung
-            logger.trace("Try to set base_features[base_features.SAMPLING_RATE_PER_STREAM]...")
-            base_features[base_features.SAMPLING_RATE_PER_STREAM] = list({
-                safe_int_conversion(stream.get("sample_rate"), 0) for stream in streams
-            })
-            logger.trace("Done.")
+#             # Sample-Raten mit sicherer int-Konvertierung
+#             logger.trace("Try to set base_features[base_features.SAMPLING_RATE_PER_STREAM]...")
+#             base_features[base_features.SAMPLING_RATE_PER_STREAM] = list({
+#                 safe_int_conversion(stream.get("sample_rate"), 0) for stream in streams
+#             })
+#             logger.trace("Done.")
             
-            # Sample-Formate mit sicherer dtype-Konvertierung
-            logger.trace("Try to set base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE]...")
-            base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = list({
-                safe_get_sample_format_dtype(stream.get("sample_fmt", "s16")) for stream in streams
-            })
-            logger.trace("Done.")
+#             # Sample-Formate mit sicherer dtype-Konvertierung
+#             logger.trace("Try to set base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE]...")
+#             base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = list({
+#                 safe_get_sample_format_dtype(stream.get("sample_fmt", "s16")) for stream in streams
+#             })
+#             logger.trace("Done.")
             
-            # Planar-Check mit sicherer String-Behandlung
-            logger.trace("Try to set base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR]...")
-            base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = list({
-                str(stream.get("sample_fmt", "s16")).endswith("p") for stream in streams
-            })
-            logger.trace("Done.")
+#             # Planar-Check mit sicherer String-Behandlung
+#             logger.trace("Try to set base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR]...")
+#             base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = list({
+#                 str(stream.get("sample_fmt", "s16")).endswith("p") for stream in streams
+#             })
+#             logger.trace("Done.")
             
-            # Kanal-Anzahl mit sicherer int-Konvertierung
-            logger.trace("Try to set base_features[base_features.CHANNELS_PER_STREAM]...")
-            base_features[base_features.CHANNELS_PER_STREAM] = list({
-                safe_int_conversion(stream.get("channels"), 0) for stream in streams
-            })
-            logger.trace("Done.")
+#             # Kanal-Anzahl mit sicherer int-Konvertierung
+#             logger.trace("Try to set base_features[base_features.CHANNELS_PER_STREAM]...")
+#             base_features[base_features.CHANNELS_PER_STREAM] = list({
+#                 safe_int_conversion(stream.get("channels"), 0) for stream in streams
+#             })
+#             logger.trace("Done.")
             
-        except Exception as e:
-            logger.warning(f"Error processing stream metadata: {e}. Using default values.")
-            # Fallback-Werte setzen
-            base_features[base_features.CODEC_PER_STREAM] = ["unknown"]
-            base_features[base_features.SAMPLING_RATE_PER_STREAM] = [0]
-            base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = [AudioSampleFormatMap["s16"]]
-            base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = [False]
-            base_features[base_features.CHANNELS_PER_STREAM] = [0]
+#         except Exception as e:
+#             logger.warning(f"Error processing stream metadata: {e}. Using default values.")
+#             # Fallback-Werte setzen
+#             base_features[base_features.CODEC_PER_STREAM] = ["unknown"]
+#             base_features[base_features.SAMPLING_RATE_PER_STREAM] = [0]
+#             base_features[base_features.SAMPLE_FORMAT_PER_STREAM_AS_DTYPE] = [AudioSampleFormatMap["s16"]]
+#             base_features[base_features.SAMPLE_FORMAT_PER_STREAM_IS_PLANAR] = [False]
+#             base_features[base_features.CHANNELS_PER_STREAM] = [0]
 
-        logger.trace("Try to sort the codecs of streams into UNCOMPRESSED, LOSSLESS_COMPRESSED or LOSSY_COMPRESSED...")
-        base_features[base_features.CODEC_COMPRESSION_KIND_PER_STREAM] = []
-        for codec in base_features[base_features.CODEC_PER_STREAM]:
-            base_features[base_features.CODEC_COMPRESSION_KIND_PER_STREAM].append(
-                                        audio_codec_compression(codec)
-                                        )
-        logger.trace("Done.")
+#         logger.trace("Try to sort the codecs of streams into UNCOMPRESSED, LOSSLESS_COMPRESSED or LOSSY_COMPRESSED...")
+#         base_features[base_features.CODEC_COMPRESSION_KIND_PER_STREAM] = []
+#         for codec in base_features[base_features.CODEC_PER_STREAM]:
+#             base_features[base_features.CODEC_COMPRESSION_KIND_PER_STREAM].append(
+#                                         audio_codec_compression(codec)
+#                                         )
+#         logger.trace("Done.")
 
-        # calc hash (SHA256)
-        logger.trace("Try to calculate the hash of the file data...")
-        hasher = hashlib.sha256()
-        with file_path.open("rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hasher.update(chunk)
-        logger.trace("Done.")
-        base_features[base_features.SH256] = hasher.hexdigest()
-        logger.trace(f"All meta data added to 'base_features': {base_features=}")
+#         # calc hash (SHA256)
+#         logger.trace("Try to calculate the hash of the file data...")
+#         hasher = hashlib.sha256()
+#         with file_path.open("rb") as f:
+#             for chunk in iter(lambda: f.read(8192), b""):
+#                 hasher.update(chunk)
+#         logger.trace("Done.")
+#         base_features[base_features.SH256] = hasher.hexdigest()
+#         logger.trace(f"All meta data added to 'base_features': {base_features=}")
 
-    except Exception as e:
-        logger.error(f"Error during extraction of meta data information of file {file_path.name}: {e} – Reset metadata to the initial values of class 'AudioFileBaseFeatures'.")
-        # so reset to default
-        base_features = AudioFileBaseFeatures()
-        logger.trace(f"After error, 'base_features' are initialized with {base_features}.")
+#     except Exception as e:
+#         logger.error(f"Error during extraction of meta data information of file {file_path.name}: {e} – Reset metadata to the initial values of class 'AudioFileBaseFeatures'.")
+#         # so reset to default
+#         base_features = AudioFileBaseFeatures()
+#         logger.trace(f"After error, 'base_features' are initialized with {base_features}.")
 
-    logger.debug(f"Base features return value of the audio file {file_path.name} read out are: {base_features}")
-    return base_features
+#     logger.debug(f"Base features return value of the audio file {file_path.name} read out are: {base_features}")
+#     return base_features
 
 def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
-                                     base_features: AudioFileBaseFeatures,
+                                     base_features,#: AudioFileBaseFeatures,
                                      sh246_check_only: bool = False) -> bool:
     """
     Überprüft, ob eine Audiodatei mit den angegebenen Eigenschaften bereits in der Gruppe vorhanden ist.
@@ -351,124 +310,124 @@ def is_audio_in_original_audio_group(zarr_original_audio_group: zarr.Group,
     logger.debug(f"Audio file {base_features.FILENAME} finally not recognized as 'already imported'.")
     return False
 
-class FileMeta:
-    """
-    Vollständige audiorelevante Metainformationen einer Datei über ffprobe und mutagen.
+# class FileMeta:
+#     """
+#     Vollständige audiorelevante Metainformationen einer Datei über ffprobe und mutagen.
     
-    Args:
-        file: Pfad zur Datei mit Audio Streams
-    """
-    def __init__(self, file: str|pathlib.Path):
-        file = pathlib.Path(file)
-        logger.trace(f"Instance of class FileMeta created. Reading meta information from media file {file.name} requested.")
+#     Args:
+#         file: Pfad zur Datei mit Audio Streams
+#     """
+#     def __init__(self, file: str|pathlib.Path):
+#         file = pathlib.Path(file)
+#         logger.trace(f"Instance of class FileMeta created. Reading meta information from media file {file.name} requested.")
 
-        # from ffprobe
-        # ------------
-        logger.trace("Read meta information by using 'ffprobe'...")
-        self.meta = {"ffprobe": self._ffprobe_info(file)}
-        # How many audio streams are in it?
-        nb_streams = len(self.meta["ffprobe"].get("streams", []))
-        if nb_streams == 0:
-            logger.error(f"No audio streams found in file {file.name} by using ffprobe.")
-        elif nb_streams == 1:
-            logger.debug(f"Found exactly 1 audio stream in file {file.name} by using ffprobe.")
-        else:
-            logger.warning(f"Found {nb_streams} audio streams in file {file.name} by using ffprobe. Typically, the first of them will be imported only.")
+#         # from ffprobe
+#         # ------------
+#         logger.trace("Read meta information by using 'ffprobe'...")
+#         self.meta = {"ffprobe": self._ffprobe_info(file)}
+#         # How many audio streams are in it?
+#         nb_streams = len(self.meta["ffprobe"].get("streams", []))
+#         if nb_streams == 0:
+#             logger.error(f"No audio streams found in file {file.name} by using ffprobe.")
+#         elif nb_streams == 1:
+#             logger.debug(f"Found exactly 1 audio stream in file {file.name} by using ffprobe.")
+#         else:
+#             logger.warning(f"Found {nb_streams} audio streams in file {file.name} by using ffprobe. Typically, the first of them will be imported only.")
 
-        # via mutagen
-        # -----------
-        logger.trace("Read meta information by using 'mutagen'...")
-        self.meta["mutagen"] = self._mutagen_info(file)
-        logger.trace("Done. (Reading meta information by using 'mutagen')")
+#         # via mutagen
+#         # -----------
+#         logger.trace("Read meta information by using 'mutagen'...")
+#         self.meta["mutagen"] = self._mutagen_info(file)
+#         logger.trace("Done. (Reading meta information by using 'mutagen')")
 
-    @classmethod
-    def _ffprobe_info(cls, file: pathlib.Path) -> dict:
-        logger.trace("Reading common infos (format, streams, chapters) of file '{file.name}' by using ffprobe requested.")
-        cmd = [
-            "ffprobe",
-            "-v", "error",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            "-show_chapters",
-            "-select_streams", "a",  # audio streams only
-            str(file)
-        ]
-        logger.trace(f"Command to read is: {cmd}")
-        result = subprocess.run(cmd,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                check=True,
-                                text=True)
-        info = cls._typing_numbers(json.loads(result.stdout))
-        # remove non-audio streams (but doesn't changes the index number of the audio
-        # streams if other streams are sorted out before)
-        info["streams"] = [
-                                stream for stream in info.get("streams", [])
-                                if stream.get("codec_type") == "audio"
-                            ]
-        logger.trace(f"Reading common info from file '{str(file)}' finished.")
-        return info
+#     @classmethod
+#     def _ffprobe_info(cls, file: pathlib.Path) -> dict:
+#         logger.trace("Reading common infos (format, streams, chapters) of file '{file.name}' by using ffprobe requested.")
+#         cmd = [
+#             "ffprobe",
+#             "-v", "error",
+#             "-print_format", "json",
+#             "-show_format",
+#             "-show_streams",
+#             "-show_chapters",
+#             "-select_streams", "a",  # audio streams only
+#             str(file)
+#         ]
+#         logger.trace(f"Command to read is: {cmd}")
+#         result = subprocess.run(cmd,
+#                                 stdout=subprocess.PIPE,
+#                                 stderr=subprocess.PIPE,
+#                                 check=True,
+#                                 text=True)
+#         info = cls._typing_numbers(json.loads(result.stdout))
+#         # remove non-audio streams (but doesn't changes the index number of the audio
+#         # streams if other streams are sorted out before)
+#         info["streams"] = [
+#                                 stream for stream in info.get("streams", [])
+#                                 if stream.get("codec_type") == "audio"
+#                             ]
+#         logger.trace(f"Reading common info from file '{str(file)}' finished.")
+#         return info
 
-    @staticmethod
-    def _mutagen_info(file: pathlib.Path) -> dict:
-        logger.trace(f"Reading info from file '{str(file)}' by using 'mutagen' requested...")
-        try:
-            audio = MutagenFile(str(file), easy=False)
-        except Exception as err:
-            logger.error(f"File {file.name} could not be processed by Mutagen successfully! No meta data from this method. MutagenFile() function from the mutagen modul rasies following exception: '{err}'.")
-            return {}
-        logger.trace("Reading done.")
-        if not audio:
-            logger.error(f"File '{str(file)}' could not read by 'mutagen'. No meta data from this method.")
-            return {}
-        logger.trace("Sort out technical info and tags...")
-        info = {}
-        if audio.info:
-            info['technical'] = {
-                'length': getattr(audio.info, 'length', None),
-                'bitrate': getattr(audio.info, 'bitrate', None),
-                'sample_rate': getattr(audio.info, 'sample_rate', None),
-                'channels': getattr(audio.info, 'channels', None),
-                'codec': audio.__class__.__name__,
-            }
-        info['tags'] = {}
-        if audio.tags:
-            for key, value in audio.tags.items():
-                try:
-                    # Bei manchen Formaten sind die Werte Listen, bei anderen nicht
-                    info['tags'][key] = value.text if hasattr(value, 'text') else str(value)
-                except Exception:
-                    info['tags'][key] = str(value)
-        logger.trace("Done. (Sort out technical info and tags)")
-        return info
+#     @staticmethod
+#     def _mutagen_info(file: pathlib.Path) -> dict:
+#         logger.trace(f"Reading info from file '{str(file)}' by using 'mutagen' requested...")
+#         try:
+#             audio = MutagenFile(str(file), easy=False)
+#         except Exception as err:
+#             logger.error(f"File {file.name} could not be processed by Mutagen successfully! No meta data from this method. MutagenFile() function from the mutagen modul rasies following exception: '{err}'.")
+#             return {}
+#         logger.trace("Reading done.")
+#         if not audio:
+#             logger.error(f"File '{str(file)}' could not read by 'mutagen'. No meta data from this method.")
+#             return {}
+#         logger.trace("Sort out technical info and tags...")
+#         info = {}
+#         if audio.info:
+#             info['technical'] = {
+#                 'length': getattr(audio.info, 'length', None),
+#                 'bitrate': getattr(audio.info, 'bitrate', None),
+#                 'sample_rate': getattr(audio.info, 'sample_rate', None),
+#                 'channels': getattr(audio.info, 'channels', None),
+#                 'codec': audio.__class__.__name__,
+#             }
+#         info['tags'] = {}
+#         if audio.tags:
+#             for key, value in audio.tags.items():
+#                 try:
+#                     # Bei manchen Formaten sind die Werte Listen, bei anderen nicht
+#                     info['tags'][key] = value.text if hasattr(value, 'text') else str(value)
+#                 except Exception:
+#                     info['tags'][key] = str(value)
+#         logger.trace("Done. (Sort out technical info and tags)")
+#         return info
         
-    def __str__(self):
-        return self.as_yaml()
+#     def __str__(self):
+#         return self.as_yaml()
     
-    def as_yaml(self):
-        return yaml.dump(self.meta, sort_keys=False, allow_unicode=True)
+#     def as_yaml(self):
+#         return yaml.dump(self.meta, sort_keys=False, allow_unicode=True)
     
-    def as_dict(self):
-        return self.meta
+#     def as_dict(self):
+#         return self.meta
     
-    @classmethod
-    def _typing_numbers(cls, obj):
-        """Recursive typing if objects are int or float"""
-        if isinstance(obj, dict):
-            return {k: cls._typing_numbers(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [cls._typing_numbers(i) for i in obj]
-        elif isinstance(obj, str):
-            # Konvertiere Strings, die wie Zahlen aussehen
-            if obj.isdigit():
-                return int(obj)
-            try:
-                return float(obj)
-            except ValueError:
-                return obj
-        else:
-            return obj
+#     @classmethod
+#     def _typing_numbers(cls, obj):
+#         """Recursive typing if objects are int or float"""
+#         if isinstance(obj, dict):
+#             return {k: cls._typing_numbers(v) for k, v in obj.items()}
+#         elif isinstance(obj, list):
+#             return [cls._typing_numbers(i) for i in obj]
+#         elif isinstance(obj, str):
+#             # Konvertiere Strings, die wie Zahlen aussehen
+#             if obj.isdigit():
+#                 return int(obj)
+#             try:
+#                 return float(obj)
+#             except ValueError:
+#                 return obj
+#         else:
+#             return obj
 
 
 def _get_source_params(input_file: pathlib.Path) -> dict:
@@ -501,45 +460,6 @@ def _get_source_params(input_file: pathlib.Path) -> dict:
             }
     logger.debug(f"Read parameters in 'source_params' are: {source_params}")
     return source_params
-
-# def _get_ffmpeg_sample_fmt(source_sample_fmt: str, target_codec: str) -> str:
-#     """
-#     Gibt das beste sample_fmt-Argument für ffmpeg zurück, basierend auf Quellformat und Zielcodec.
-    
-#     Args:
-#         source_sample_fmt: Sample-Format der Quelle laut ffprobe, z.B. "fltp", "s16", "s32", "flt"
-#         target_codec: "flac" oder "opus"
-    
-#     Returns:
-#         str: Der passende Wert für "-sample_fmt" bei ffmpeg (z.B. "s32", "flt", "s16")
-#     """
-#     logger.trace(f"Get ffmpeg sample format requested. Given source format: {source_sample_fmt} and target codec: {target_codec}")
-#     # Mappings nach Fähigkeiten der Codecs
-#     flac_supported = ["s8", "s12", "s16", "s24", "s32"]
-#     opus_supported = ["s16", "s24", "flt"]
-
-#     # Auflösen von planar zu packed
-#     normalized_fmt = source_sample_fmt.rstrip("p") if source_sample_fmt.endswith("p") else source_sample_fmt
-#     logger.trace(f"Normalized source sample format: {normalized_fmt}")
-
-#     if target_codec == "flac":
-#         if normalized_fmt in flac_supported:
-#             retval = normalized_fmt
-#         else:
-#             # fallback
-#             retval = "s32"
-#     elif target_codec == "opus":
-#         # Opus arbeitet intern mit 16-bit, akzeptiert aber auch float input
-#         if normalized_fmt in opus_supported:
-#             retval = normalized_fmt
-#         # fallback auf float oder s16
-#         else:
-#             retval =  "flt" if normalized_fmt.startswith("f") else "s16"
-#     else:
-#         logger.error(f"Could not find any convertion value for '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
-#         raise NotImplementedError(f"Unsupported codec: {target_codec}")
-#     logger.debug(f"Found the sample format '{retval}' as convertion from '{source_sample_fmt}' as source sample format (function _get_ffmpeg_sample_fmt() ).")
-#     return retval
 
 
 def import_original_audio_file(
