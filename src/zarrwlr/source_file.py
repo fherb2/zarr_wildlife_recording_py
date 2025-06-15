@@ -3,14 +3,14 @@ import subprocess
 import json
 import pathlib
 import hashlib
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from .utils import safe_int_conversion, safe_float_conversion, can_ffmpeg_decode_codec
-from .audio_coding import TargetFormats
+from .audio_coding import TargetFormats, TargetSamplingTransforming, AudioCompressionBaseType, get_audio_codec_compression_type
 
 # import and initialize logging
 from .logsetup import get_module_logger
 logger = get_module_logger(__file__)
-logger.trace("Module loading...")
+logger.trace("Enhanced FileParameter module loading...")
 
 # ############################################################
 # ############################################################
@@ -29,13 +29,14 @@ class AudioStreamParameters:
     sample_format: str|None = None
     codec_name: str|None = None
     nb_samples: int|None = None
+    bit_rate: int|None = None  # Bitrate for quality analysis only
 #
 # End of Class AudioStreamParameters
 #
 # ############################################################
 # ############################################################
-    
-    
+
+
 # ############################################################
 # ############################################################
 #
@@ -51,10 +52,16 @@ class FileBaseParameters:
     file_size_bytes: int|None = None
     file_sh256: str|None = None
     container_format_name: str|None = None
-    stream_parameters: list[AudioStreamParameters] = [] # sorted by the 'index_of_stream_in_file' parameter
-    selected_audio_streams: list[int] = [] # contains 'index_of_stream_in_file' parameters of selected streams
+    stream_parameters: list[AudioStreamParameters] = None
+    selected_audio_streams: list[int] = None
     total_nb_of_channels = 0
     total_nb_of_channels_to_import = 0
+    
+    def __post_init__(self):
+        if self.stream_parameters is None:
+            self.stream_parameters = []
+        if self.selected_audio_streams is None:
+            self.selected_audio_streams = []
 #
 # End of Class FileBaseParameters
 #
@@ -62,390 +69,1134 @@ class FileBaseParameters:
 # ############################################################
 
 
+# ############################################################
+# ############################################################
+#
+# Class QualityAnalyzer
+# =====================
+#
+# Analyzes audio quality and suggests optimal parameters
+#
+class QualityAnalyzer:
+    """Analyzes audio quality and provides intelligent parameter suggestions"""
+    
+    # Ultraschall-Konstanten
+    ULTRASOUND_THRESHOLD = 96000  # 96kS/s als Grenze für Ultraschall
+    ULTRASOUND_REINTERPRET_TARGET = 32000  # 32kS/s für Reinterpretation
+    
+    @staticmethod
+    def _is_ultrasound_recording(sample_rate: int) -> bool:
+        """Prüft, ob es sich um eine Ultraschallaufnahme handelt"""
+        return sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD
+    
+    @staticmethod
+    def analyze_source_quality(stream_params: AudioStreamParameters) -> dict:
+        """
+        Analyzes the quality characteristics of the source audio
+        
+        Returns:
+            dict: Quality analysis with compression type, bitrate class, etc.
+        """
+        codec_compression = get_audio_codec_compression_type(stream_params.codec_name)
+        
+        analysis = {
+            'compression_type': codec_compression,
+            'codec_name': stream_params.codec_name,
+            'sample_rate': stream_params.sample_rate,
+            'bit_rate': stream_params.bit_rate,
+            'channels': stream_params.nb_channels,
+            'sample_format': stream_params.sample_format,
+            'bitrate_class': 'unknown',
+            'quality_tier': 'unknown',
+            'is_ultrasound': QualityAnalyzer._is_ultrasound_recording(stream_params.sample_rate or 44100)
+        }
+        
+        # Analyze bitrate quality for lossy sources
+        if codec_compression == AudioCompressionBaseType.LOSSY_COMPRESSED and stream_params.bit_rate:
+            analysis['bitrate_class'] = QualityAnalyzer._classify_bitrate(
+                stream_params.bit_rate, stream_params.nb_channels
+            )
+        
+        # Determine overall quality tier
+        analysis['quality_tier'] = QualityAnalyzer._determine_quality_tier(analysis)
+        
+        return analysis
+    
+    @staticmethod
+    def _classify_bitrate(bitrate: int, channels: int) -> str:
+        """
+        Enhanced bitrate classification that accounts for inter-channel redundancy
+        
+        AAC uses joint stereo and parametric stereo techniques that exploit
+        inter-channel redundancies, making simple per-channel division incorrect.
+        """
+        
+        if channels == 1:  # Mono
+            if bitrate < 86000:      # Deine Grenze für kritisch
+                return 'low'
+            elif bitrate < 128000:
+                return 'medium' 
+            elif bitrate < 196000:   # Deine neue Grenze
+                return 'high'
+            else:
+                return 'excessive'
+        
+        elif channels == 2:  # Stereo - nicht einfach durch 2 teilen!
+            # AAC Stereo-Effizienz: ~1.3-1.6x statt 2x Mono-Bitrate
+            if bitrate < 110000:     # ~86k * 1.3 (Inter-channel Effizienz)
+                return 'low'
+            elif bitrate < 170000:   # ~128k * 1.3
+                return 'medium'
+            elif bitrate < 250000:   # ~196k * 1.3  
+                return 'high'
+            else:
+                return 'excessive'
+        
+        else:  # Multichannel (>2)
+            # Für >2 Kanäle: AAC nutzt noch mehr Inter-Channel-Redundanzen
+            per_channel_equivalent = bitrate / (channels * 0.7)  # 30% Effizienz-Bonus
+            if per_channel_equivalent < 86000:
+                return 'low'
+            elif per_channel_equivalent < 128000:
+                return 'medium'
+            elif per_channel_equivalent < 196000:
+                return 'high'
+            else:
+                return 'excessive'
+    
+    @staticmethod
+    def _determine_quality_tier(analysis: dict) -> str:
+        """Determine overall quality tier (low/standard/high/studio/ultrasound)"""
+        compression = analysis['compression_type']
+        sample_rate = analysis['sample_rate'] or 44100
+        is_ultrasound = analysis.get('is_ultrasound', False)
+        
+        # Ultraschall bekommt eigene Kategorie
+        if is_ultrasound:
+            return 'ultrasound'
+        
+        if compression == AudioCompressionBaseType.UNCOMPRESSED:
+            if sample_rate >= 96000:
+                return 'studio'
+            elif sample_rate >= 48000:
+                return 'high'
+            else:
+                return 'standard'
+        elif compression == AudioCompressionBaseType.LOSSLESS_COMPRESSED:
+            if sample_rate >= 96000:
+                return 'studio'
+            elif sample_rate >= 48000:
+                return 'high'
+            else:
+                return 'standard'
+        else:  # LOSSY_COMPRESSED
+            bitrate_class = analysis.get('bitrate_class', 'unknown')
+            if bitrate_class in ['high', 'excessive']:
+                return 'standard'  # Good lossy can be standard quality
+            elif bitrate_class == 'medium':
+                return 'standard'
+            else:
+                return 'low'
+    
+    @staticmethod
+    def suggest_target_parameters(quality_analysis: dict) -> dict:
+        """
+        Suggest optimal target parameters based on source quality
+        
+        NEUE REGEL für Ultraschall:
+        - Sample Rate > 96kS/s = Ultraschallaufnahme
+        - Für Lossless: FLAC mit exakter Sample Rate (bis 655kHz FLAC-Limit)
+        - Für Lossy: NIEMALS Resampling → nur Reinterpretation auf 32kS/s
+        """
+        compression = quality_analysis['compression_type']
+        sample_rate = quality_analysis.get('sample_rate', 44100)
+        
+        suggestions = {}
+        
+        # NEUE LOGIK: Ultraschall-Detection zuerst prüfen
+        if QualityAnalyzer._is_ultrasound_recording(sample_rate):
+            suggestions.update(QualityAnalyzer._suggest_ultrasound_parameters(quality_analysis))
+            
+        elif compression == AudioCompressionBaseType.LOSSY_COMPRESSED:
+            # Standard-Lossy source → AAC with improved bitrate
+            suggestions.update(QualityAnalyzer._suggest_aac_upgrade(quality_analysis))
+            
+        elif compression in [AudioCompressionBaseType.LOSSLESS_COMPRESSED, AudioCompressionBaseType.UNCOMPRESSED]:
+            # Standard-Lossless source → FLAC to preserve quality
+            suggestions.update(QualityAnalyzer._suggest_flac_preserve(quality_analysis))
+            
+        else:
+            # Unknown compression → Conservative AAC choice
+            suggestions.update(QualityAnalyzer._suggest_conservative_aac(quality_analysis))
+        
+        return suggestions
+    
+    @staticmethod
+    def _suggest_ultrasound_parameters(quality_analysis: dict) -> dict:
+        """
+        NEUE METHODE: Spezielle Behandlung für Ultraschallaufnahmen
+        
+        Regeln:
+        - Lossless Quelle → FLAC mit exakter Sample Rate beibehalten
+        - Lossy gewünscht → Reinterpretation auf 32kS/s (NIEMALS Resampling!)
+        - Sample Rate > 655kHz → FLAC-Limit überschritten, spezielle Behandlung
+        """
+        compression = quality_analysis['compression_type']
+        sample_rate = quality_analysis.get('sample_rate', 96000)
+        
+        # Für Lossless-Quellen: FLAC bevorzugen
+        if compression in [AudioCompressionBaseType.LOSSLESS_COMPRESSED, AudioCompressionBaseType.UNCOMPRESSED]:
+            
+            if sample_rate <= 655350:  # Innerhalb FLAC-Grenzen
+                return {
+                    'target_format': TargetFormats.FLAC,  # Auto sample rate
+                    'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
+                    'flac_compression_level': 6,  # Höhere Kompression für große Ultraschall-Dateien
+                    'reason': f'Ultraschall-Aufnahme ({sample_rate//1000}kHz) → verlustfreie FLAC-Erhaltung'
+                }
+            else:
+                # Über FLAC-Limit → spezielle Behandlung nötig
+                return {
+                    'target_format': TargetFormats.FLAC_192000,
+                    'target_sampling_transform': TargetSamplingTransforming.RESAMPLING_192000,
+                    'flac_compression_level': 6,
+                    'reason': f'Ultraschall {sample_rate//1000}kHz überschreitet FLAC-Limit → Resampling auf 192kHz'
+                }
+        
+        # Für Lossy-Quellen oder wenn Lossy explizit gewünscht
+        else:
+            return {
+                'target_format': TargetFormats.AAC_32000,
+                'target_sampling_transform': TargetSamplingTransforming.REINTERPRETING_32000,
+                'aac_bitrate': 192000,  # Höhere Bitrate für Ultraschall-Reinterpretation
+                'reason': f'Ultraschall-Signal ({sample_rate//1000}kHz) → Reinterpretation auf 32kHz für AAC (16kHz Nyquist)'
+            }
+    
+    @staticmethod
+    def _suggest_aac_upgrade(quality_analysis: dict) -> dict:
+        """Suggest AAC parameters for lossy source upgrade"""
+        original_bitrate = quality_analysis.get('bit_rate', 128000)
+        channels = quality_analysis.get('channels', 2)
+        sample_rate = quality_analysis.get('sample_rate', 44100)
+        
+        # Increase bitrate by 25-40% to compensate for re-encoding loss
+        if original_bitrate < 128000:
+            target_bitrate = min(original_bitrate * 1.4, 192000)  # Significant boost for low quality
+        else:
+            target_bitrate = min(original_bitrate * 1.25, 320000)  # Moderate boost for good quality
+        
+        # Choose appropriate AAC format based on sample rate
+        if sample_rate <= 48000:
+            if sample_rate == 44100:
+                target_format = TargetFormats.AAC_44100
+            elif sample_rate == 48000:
+                target_format = TargetFormats.AAC_48000
+            else:
+                target_format = TargetFormats.AAC  # Auto sample rate
+        else:
+            target_format = TargetFormats.AAC  # Let AAC handle high sample rates
+        
+        return {
+            'target_format': target_format,
+            'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
+            'aac_bitrate': int(target_bitrate),
+            'reason': f'Lossy source upgrade: {original_bitrate//1000}kbps → {int(target_bitrate)//1000}kbps AAC'
+        }
+    
+    @staticmethod
+    def _suggest_flac_preserve(quality_analysis: dict) -> dict:
+        """
+        ANGEPASSTE METHODE: FLAC-Vorschläge mit Ultraschall-Awareness
+        """
+        sample_rate = quality_analysis.get('sample_rate', 44100)
+        
+        # NEUE PRÜFUNG: Ultraschall-Bereich?
+        if QualityAnalyzer._is_ultrasound_recording(sample_rate):
+            # Delegiere an Ultraschall-Logik
+            return QualityAnalyzer._suggest_ultrasound_parameters(quality_analysis)
+        
+        # Standard-Bereich: Bestehende Logik beibehalten
+        if sample_rate == 44100:
+            target_format = TargetFormats.FLAC_44100
+        elif sample_rate == 48000:
+            target_format = TargetFormats.FLAC_48000
+        elif sample_rate == 88200:
+            target_format = TargetFormats.FLAC_88200
+        elif sample_rate == 96000:
+            target_format = TargetFormats.FLAC_96000
+        elif sample_rate == 176400:
+            target_format = TargetFormats.FLAC_176400
+        elif sample_rate == 192000:
+            target_format = TargetFormats.FLAC_192000
+        elif sample_rate <= 655350:  # Standard FLAC-Bereich
+            target_format = TargetFormats.FLAC  # Auto sample rate
+        else:
+            # Sollte nicht erreicht werden, da Ultraschall-Check vorher greift
+            target_format = TargetFormats.FLAC_192000
+            return {
+                'target_format': target_format,
+                'target_sampling_transform': TargetSamplingTransforming.RESAMPLING_192000,
+                'reason': f'Sample rate {sample_rate//1000}kHz exceeds FLAC limit → resample to 192kHz'
+            }
+        
+        return {
+            'target_format': target_format,
+            'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
+            'flac_compression_level': 4,  # Balanced compression
+            'reason': f'Lossless source → preserve with FLAC at {sample_rate//1000}kHz'
+        }
+    
+    @staticmethod
+    def _suggest_conservative_aac(quality_analysis: dict) -> dict:
+        """Conservative AAC suggestion for unknown sources"""
+        sample_rate = quality_analysis.get('sample_rate', 44100)
+        channels = quality_analysis.get('channels', 2)
+        
+        # Conservative high-quality AAC
+        bitrate = 192000 if channels == 2 else 128000
+        
+        if sample_rate == 44100:
+            target_format = TargetFormats.AAC_44100
+        elif sample_rate == 48000:
+            target_format = TargetFormats.AAC_48000
+        else:
+            target_format = TargetFormats.AAC
+        
+        return {
+            'target_format': target_format,
+            'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
+            'aac_bitrate': bitrate,
+            'reason': f'Unknown source quality → conservative {bitrate//1000}kbps AAC'
+        }
+#
+# End of Class QualityAnalyzer
+#
+# ############################################################
+# ############################################################
 
 # ############################################################
 # ############################################################
 #
-# Class FileParameter
-# ===================
+# Class ConflictAnalyzer  
+# ======================
 #
-# Analysis of the audio source file to set it free for import
+# Detects conflicts and quality issues
+#
+class ConflictAnalyzer:
+    """Detects configuration conflicts and quality issues"""
+    
+    @staticmethod
+    def analyze_conflicts(source_analysis: dict, target_params: dict) -> dict:
+        """
+        Analyze conflicts between source and target parameters
+        
+        Returns:
+            dict: {
+                'blocking_conflicts': [],     # Prevent import
+                'quality_warnings': [],      # Quality degradation
+                'efficiency_warnings': []    # Unnecessary bloat
+            }
+        """
+        conflicts = {
+            'blocking_conflicts': [],
+            'quality_warnings': [],
+            'efficiency_warnings': []
+        }
+        
+        # Check target format compatibility
+        target_format = target_params.get('target_format')
+        if target_format:
+            conflicts.update(ConflictAnalyzer._check_format_compatibility(
+                source_analysis, target_format, target_params
+            ))
+        
+        # Check sampling rate conflicts
+        target_sampling = target_params.get('target_sampling_transform')
+        if target_sampling:
+            conflicts.update(ConflictAnalyzer._check_sampling_conflicts(
+                source_analysis, target_sampling
+            ))
+        
+        # Check quality degradation
+        conflicts.update(ConflictAnalyzer._check_quality_degradation(
+            source_analysis, target_params
+        ))
+        
+        # Check efficiency issues (bloat)
+        conflicts.update(ConflictAnalyzer._check_efficiency_issues(
+            source_analysis, target_params
+        ))
+        
+        return conflicts
+    
+    @staticmethod
+    def _check_format_compatibility(source_analysis: dict, target_format: TargetFormats, target_params: dict) -> dict:
+        """Check if target format is compatible with source"""
+        conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
+        
+        source_rate = source_analysis.get('sample_rate', 44100)
+        
+        # Check if target format supports source sample rate
+        if target_format.sample_rate and target_format.sample_rate != source_rate:
+            # Sample rate mismatch - check if transform is specified
+            transform = target_params.get('target_sampling_transform')
+            if not transform or transform == TargetSamplingTransforming.EXACTLY:
+                conflicts['blocking_conflicts'].append(
+                    f"Sample rate mismatch: source {source_rate}Hz vs target {target_format.sample_rate}Hz. "
+                    f"Specify target_sampling_transform for conversion."
+                )
+        
+        return conflicts
+    
+    @staticmethod 
+    def _check_sampling_conflicts(source_analysis: dict, target_sampling: TargetSamplingTransforming) -> dict:
+        """Check sampling transformation conflicts"""
+        conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
+        
+        source_rate = source_analysis.get('sample_rate', 44100)
+        
+        if target_sampling.sample_rate and target_sampling.code == "resampling":
+            # Resampling quality check
+            ratio = target_sampling.sample_rate / source_rate
+            if ratio < 0.5:
+                conflicts['quality_warnings'].append(
+                    f"Significant downsampling: {source_rate}Hz → {target_sampling.sample_rate}Hz "
+                    f"(ratio: {ratio:.2f}). Audio quality will be reduced."
+                )
+            elif ratio > 2.0:
+                conflicts['efficiency_warnings'].append(
+                    f"Significant upsampling: {source_rate}Hz → {target_sampling.sample_rate}Hz "
+                    f"(ratio: {ratio:.2f}). File size will increase without quality benefit."
+                )
+        
+        return conflicts
+    
+    @staticmethod
+    def _check_quality_degradation(source_analysis: dict, target_params: dict) -> dict:
+        """
+        ERWEITERTE METHODE: Check for quality degradation scenarios + Ultraschall-Schutz
+        """
+        conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
+        
+        source_compression = source_analysis.get('compression_type')
+        target_format = target_params.get('target_format')
+        source_sample_rate = source_analysis.get('sample_rate', 44100)
+        target_sampling = target_params.get('target_sampling_transform')
+        is_ultrasound = source_analysis.get('is_ultrasound', False)
+        
+        # NEUE PRÜFUNG: Ultraschall-Schutz
+        if is_ultrasound or source_sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD:
+            
+            # Ultraschall + Lossy → Nur Reinterpretation erlaubt
+            if target_format and target_format.code == 'aac':
+                if target_sampling and target_sampling.code == 'resampling':
+                    conflicts['blocking_conflicts'].append(
+                        f"🚫 KRITISCH: Ultraschall-Aufnahme ({source_sample_rate//1000}kHz) + AAC + Resampling! "
+                        f"Ultraschall-Signale werden zerstört. Nutze REINTERPRETING_32000 statt Resampling."
+                    )
+                elif not target_sampling or (target_sampling.code != 'reinterpreting' and target_sampling != TargetSamplingTransforming.EXACTLY):
+                    conflicts['quality_warnings'].append(
+                        f"⚠️  Ultraschall → AAC ohne Reinterpretation. "
+                        f"Empfehlung: target_sampling_transform = 'REINTERPRETING_32000'"
+                    )
+            
+            # Ultraschall + FLAC über Limit
+            elif target_format and target_format.code == 'flac':
+                if source_sample_rate > 655350:
+                    conflicts['quality_warnings'].append(
+                        f"⚠️  Ultraschall {source_sample_rate//1000}kHz überschreitet FLAC-Maximum (655kHz). "
+                        f"Resampling auf 192kHz oder Reinterpretation + AAC erwägen."
+                    )
+        
+        # Bestehende Qualitäts-Checks für Standard-Audio
+        if (source_compression in [AudioCompressionBaseType.LOSSLESS_COMPRESSED, AudioCompressionBaseType.UNCOMPRESSED] 
+            and target_format and target_format.code == 'aac'):
+            
+            # Lossless → Lossy conversion
+            source_tier = source_analysis.get('quality_tier', 'unknown')
+            target_bitrate = target_params.get('aac_bitrate', 160000)
+            
+            if source_tier == 'studio' and target_bitrate < 256000:
+                conflicts['quality_warnings'].append(
+                    f"Studio quality source → {target_bitrate//1000}kbps AAC. "
+                    f"Consider higher bitrate (≥256kbps) or FLAC to preserve quality."
+                )
+            elif source_tier == 'high' and target_bitrate < 192000:
+                conflicts['quality_warnings'].append(
+                    f"High quality source → {target_bitrate//1000}kbps AAC. "
+                    f"Consider ≥192kbps for better quality preservation."
+                )
+            elif source_tier == 'ultrasound':
+                conflicts['quality_warnings'].append(
+                    f"Ultraschall-Qualität → {target_bitrate//1000}kbps AAC. "
+                    f"Stelle sicher, dass Reinterpretation auf 32kHz verwendet wird."
+                )
+        
+        # Check for lossy → lossy re-encoding
+        if (source_compression == AudioCompressionBaseType.LOSSY_COMPRESSED 
+            and target_format and target_format.code == 'aac'):
+            
+            source_bitrate = source_analysis.get('bit_rate', 0)
+            target_bitrate = target_params.get('aac_bitrate', 160000)
+            
+            if target_bitrate < source_bitrate * 1.2:  # Less than 20% increase
+                conflicts['quality_warnings'].append(
+                    f"Lossy re-encoding: {source_bitrate//1000}kbps → {target_bitrate//1000}kbps AAC. "
+                    f"Quality loss expected. Consider ≥{int(source_bitrate*1.3)//1000}kbps."
+                )
+        
+        return conflicts
+    
+    @staticmethod
+    def _check_efficiency_issues(source_analysis: dict, target_params: dict) -> dict:
+        """Check for unnecessary file size inflation"""
+        conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
+        
+        source_compression = source_analysis.get('compression_type')
+        target_format = target_params.get('target_format')
+        
+        # Check for unnecessary lossless encoding of low-quality sources
+        if (source_compression == AudioCompressionBaseType.LOSSY_COMPRESSED 
+            and target_format and target_format.code == 'flac'):
+            
+            source_bitrate_class = source_analysis.get('bitrate_class', 'unknown')
+            if source_bitrate_class in ['low', 'medium']:
+                conflicts['efficiency_warnings'].append(
+                    f"Low/medium quality lossy source → FLAC. "
+                    f"Consider AAC instead to avoid unnecessary file size inflation."
+                )
+        
+        # Check for excessive AAC bitrates
+        target_bitrate = target_params.get('aac_bitrate')
+        if target_bitrate and target_bitrate > 256000:
+            channels = source_analysis.get('channels', 2)
+            per_channel = target_bitrate / channels
+            if per_channel > 192000:
+                conflicts['efficiency_warnings'].append(
+                    f"Very high AAC bitrate: {target_bitrate//1000}kbps. "
+                    f"Consider FLAC for lossless or lower AAC bitrate for efficiency."
+                )
+        
+        return conflicts
+
+
+# ############################################################
+# ############################################################
+#
+# Class FileParameter (Enhanced)
+# ==============================
+#
+# Analysis of the audio source file with intelligent suggestions
 #
 
 class FileParameter:
     """
-    Vollständige Parameter-Analyse einer Audio-Datei
-    
-    Strukturiert alle Informationen hierarchisch:
-    - Container-Level: Format, Dauer, etc.
-    - Audio-Streams: Pro Audio-Stream (Codec, Sample-Rate, etc.)
-    - Other-Streams: Nicht-Audio-Streams (Video, Subtitle, etc.)
-    - General-Meta: Alle nicht-technischen Metadaten (Tags, etc.)
+    Enhanced file parameter analysis with intelligent suggestions and quality assessment
     """
     
-    # ################################################
-    #
-    # Initialization part
-    # -------------------
-    #
-    def __init__(self, file_path: str | pathlib.Path, user_meta: dict = {}, target_format: str = 'flac', selected_audio_streams: int|list[int] = []):
+    def __init__(self, file_path: str | pathlib.Path, user_meta: dict = {}, target_format: str = None, selected_audio_streams: int|list[int] = None):
         """
-        Initialisiert FileParameter mit vollständiger ffprobe-Analyse
+        Initialize FileParameter with optional initial target settings
         
         Args:
-            file_path: Pfad zur zu analysierenden Audio-Datei
-            user_meta: Zusätzliche benutzerdefinierte Metadaten
+            file_path: Path to audio file
+            user_meta: Additional user metadata
+            target_format: Initial target format (optional)
+            selected_audio_streams: Stream selection (optional)
         """
-        logger.trace(f"Initializing a file parameter instance requested with file_path: {str(file_path)}. See following steps.")
+        logger.trace(f"Enhanced FileParameter initialization for: {str(file_path)}")
         
-        # Parameter validation and Initialisation of variables
-        logger.trace("Step 1: Validate arguments...")
+        # Core file analysis (unchanged from original)
         self._base_parameter = FileBaseParameters()
         
         file_path = pathlib.Path(file_path)
         if not file_path.exists():
-            raise FileNotFoundError(f"Audio-Datei nicht gefunden: {file_path}")
+            raise FileNotFoundError(f"Audio file not found: {file_path}")
         if not file_path.is_file():
-            raise ValueError(f"Pfad ist keine Datei: {file_path}")
+            raise ValueError(f"Path is not a file: {file_path}")
+            
         self._base_parameter.file = pathlib.Path(file_path).resolve()
         self._base_parameter.file_size_bytes = self._base_parameter.file.stat().st_size
            
-        if not self._validate_and_save_user_meta(user_meta):
-            self._user_meta:dict = {}
-            
-        if not self._validate_and_save_target_format(target_format):
-            self._target_format:str = ""
+        self._user_meta = user_meta if isinstance(user_meta, dict) else {}
         
-        if not self._validate_and_save_selected_audio_streams(selected_audio_streams):
-            self._base_parameter.selected_audio_streams = []
-        logger.trace("Step 1 Done: Validate arguments.")
+        # NEW: Target parameter management
+        self._user_defined_params: Set[str] = set()  # Track user-modified parameters
+        self._target_format: TargetFormats|None = None
+        self._target_sampling_transform: TargetSamplingTransforming|None = None
+        self._aac_bitrate: int|None = None
+        self._flac_compression_level: int = 4
         
-        logger.trace("Step 2: Parameter initialization...")
-        # Initialize other parameters
-        self._can_be_imported = False # Can not be True until analyzein was run.
-        
-        # Initialisierung der Haupt-Datenstrukturen
+        # Initialize core analysis data
+        self._can_be_imported = False
         self._general_meta: dict = {}
         self._container: dict = {}
         self._audio_streams: List[dict] = []
         self._other_streams: List[dict] = []
-        logger.trace("Step 2 Done: Parameter initialization.")
+        self._quality_analysis: dict = {}
+        self._conflicts: dict = {}
         
-        logger.trace("Step 3: Start to calculate the hash of the file data...")
+        # Calculate file hash
+        logger.trace("Calculating file hash...")
         hasher = hashlib.sha256()
         with file_path.open("rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 hasher.update(chunk)
         self._base_parameter.file_sh256 = hasher.hexdigest()
-        logger.trace("Step 3 Done: Hash creation.")
         
-        # Vollständige Daten per ffprobe einlesen
-        logger.trace("Step 4: Extract all file information...")
+        # Extract file data
+        logger.trace("Extracting file metadata...")
         self._extract_file_data()
-        logger.trace("Step 4 done: Extract all file information.")
         
-        # set non-Stream depending values
-        self._base_parameter.container_format_name = self._container["format_name"]
+        # Set initial parameters if provided
+        if target_format:
+            self.target_format = target_format
+        if selected_audio_streams:
+            self.audio_stream_selection_list = selected_audio_streams
         
-        # do a first analysis by using default configuration
-        logger.trace("Step 5: Base analysation of parameters...")
+        # Perform initial analysis
+        logger.trace("Performing initial analysis...")
         self._analyze()
-        logger.trace("Step 5 done: Base analysation of parameters. First report can be requested.")
+        
+        logger.trace("Enhanced FileParameter initialization complete")
+    
+    # ================================================
+    # TARGET PARAMETER PROPERTIES (NEW)
+    # ================================================
+    
+    @property
+    def target_format(self) -> TargetFormats|None:
+        """Current target format"""
+        return self._target_format
+    
+    @target_format.setter
+    def target_format(self, value: str|TargetFormats|None):
+        """Set target format and trigger re-analysis"""
+        if value is None:
+            self._target_format = None
+            self._user_defined_params.discard('target_format')
+        else:
+            self._target_format = TargetFormats.from_string_or_enum(value)
+            self._user_defined_params.add('target_format')
+        
+        logger.trace(f"Target format set to: {self._target_format}")
+        self._analyze()  # Auto-trigger re-analysis
+    
+    @property
+    def target_sampling_transform(self) -> TargetSamplingTransforming|None:
+        """Current target sampling transformation"""
+        return self._target_sampling_transform
+    
+    @target_sampling_transform.setter  
+    def target_sampling_transform(self, value: str|TargetSamplingTransforming|None):
+        """Set target sampling transform and trigger re-analysis"""
+        if value is None:
+            self._target_sampling_transform = None
+            self._user_defined_params.discard('target_sampling_transform')
+        else:
+            self._target_sampling_transform = TargetSamplingTransforming.from_string_or_enum(value)
+            self._user_defined_params.add('target_sampling_transform')
+        
+        logger.trace(f"Target sampling transform set to: {self._target_sampling_transform}")
+        self._analyze()
+    
+    @property
+    def aac_bitrate(self) -> int|None:
+        """Current AAC bitrate"""
+        return self._aac_bitrate
+    
+    @aac_bitrate.setter
+    def aac_bitrate(self, value: int|None):
+        """Set AAC bitrate and trigger re-analysis"""
+        if value is None:
+            self._aac_bitrate = None
+            self._user_defined_params.discard('aac_bitrate')
+        else:
+            if not isinstance(value, int) or value < 32000 or value > 320000:
+                raise ValueError(f"AAC bitrate must be between 32000 and 320000, got: {value}")
+            self._aac_bitrate = value
+            self._user_defined_params.add('aac_bitrate')
+        
+        logger.trace(f"AAC bitrate set to: {self._aac_bitrate}")
+        self._analyze()
+    
+    @property
+    def flac_compression_level(self) -> int:
+        """Current FLAC compression level"""
+        return self._flac_compression_level
+    
+    @flac_compression_level.setter
+    def flac_compression_level(self, value: int):
+        """Set FLAC compression level and trigger re-analysis"""
+        if not isinstance(value, int) or value < 0 or value > 12:
+            raise ValueError(f"FLAC compression level must be between 0 and 12, got: {value}")
+        self._flac_compression_level = value
+        self._user_defined_params.add('flac_compression_level')
+        
+        logger.trace(f"FLAC compression level set to: {self._flac_compression_level}")
+        self._analyze()
+    
+    # ================================================
+    # ENHANCED ANALYSIS METHOD
+    # ================================================
+    
+    def _analyze(self, target_format: str|None = None, audio_stream_selection_list: int|list[int]|None = None) -> bool:
+        """
+        Enhanced analysis with intelligent suggestions and conflict detection
+        """
+        logger.trace("Starting enhanced analysis...")
+        
+        # Handle parameter updates
+        if target_format is not None:
+            self.target_format = target_format
+        if audio_stream_selection_list is not None:
+            self.audio_stream_selection_list = audio_stream_selection_list
+        
+        # Perform base compatibility checks (from original implementation)
+        self._can_be_imported = True
+        
+        # Validate selected streams exist
+        if self._base_parameter.selected_audio_streams:
+            known_indices = [sp.index_of_stream_in_file for sp in self._base_parameter.stream_parameters]
+            for stream_index in self._base_parameter.selected_audio_streams:
+                if stream_index not in known_indices:
+                    self._can_be_imported = False
+                    logger.error(f"Audio stream index {stream_index} not found in file")
+                    return False
+        else:
+            # Auto-select first audio stream if none specified
+            if self._base_parameter.stream_parameters:
+                self._base_parameter.selected_audio_streams = [self._base_parameter.stream_parameters[0].index_of_stream_in_file]
+        
+        # Calculate total channels for import
+        self._base_parameter.total_nb_of_channels_to_import = 0
+        selected_indices = []
+        for i, sp in enumerate(self._base_parameter.stream_parameters):
+            if sp.index_of_stream_in_file in self._base_parameter.selected_audio_streams:
+                selected_indices.append(i)
+                self._base_parameter.total_nb_of_channels_to_import += sp.nb_channels or 0
+        
+        # Check stream compatibility
+        if len(selected_indices) > 1:
+            ref_stream = self._base_parameter.stream_parameters[selected_indices[0]]
+            for i in selected_indices[1:]:
+                stream = self._base_parameter.stream_parameters[i]
+                if stream.nb_samples != ref_stream.nb_samples:
+                    self._can_be_imported = False
+                    logger.error("Different sample counts between streams")
+                    return False
+                if stream.sample_rate != ref_stream.sample_rate:
+                    self._can_be_imported = False
+                    logger.error("Different sample rates between streams")
+                    return False
+        
+        # Check codec decodability
+        for i in selected_indices:
+            codec_name = self._base_parameter.stream_parameters[i].codec_name
+            if not can_ffmpeg_decode_codec(codec_name):
+                self._can_be_imported = False
+                logger.error(f"Codec {codec_name} not decodable by ffmpeg")
+                return False
+        
+        if not self._can_be_imported:
+            return False
+        
+        # NEW: Perform quality analysis
+        if selected_indices:
+            primary_stream = self._base_parameter.stream_parameters[selected_indices[0]]
+            self._quality_analysis = QualityAnalyzer.analyze_source_quality(
+                primary_stream
+            )
+            
+            # Apply intelligent suggestions for unset parameters
+            self._apply_intelligent_suggestions()
+            
+            # Analyze conflicts and warnings
+            self._analyze_conflicts()
+        
+        logger.trace(f"Enhanced analysis complete. Can import: {self._can_be_imported}")
+        return self._can_be_imported
+    
+    def _apply_intelligent_suggestions(self):
+        """Apply intelligent suggestions for parameters not set by user"""
+        suggestions = QualityAnalyzer.suggest_target_parameters(self._quality_analysis)
+        
+        # Only apply suggestions for parameters not explicitly set by user
+        if 'target_format' not in self._user_defined_params and 'target_format' in suggestions:
+            self._target_format = suggestions['target_format']
+            logger.trace(f"Auto-suggested target format: {self._target_format}")
+        
+        if 'target_sampling_transform' not in self._user_defined_params and 'target_sampling_transform' in suggestions:
+            self._target_sampling_transform = suggestions['target_sampling_transform']
+            logger.trace(f"Auto-suggested sampling transform: {self._target_sampling_transform}")
+        
+        if 'aac_bitrate' not in self._user_defined_params and 'aac_bitrate' in suggestions:
+            self._aac_bitrate = suggestions['aac_bitrate']
+            logger.trace(f"Auto-suggested AAC bitrate: {self._aac_bitrate}")
+        
+        if 'flac_compression_level' not in self._user_defined_params and 'flac_compression_level' in suggestions:
+            self._flac_compression_level = suggestions['flac_compression_level']
+            logger.trace(f"Auto-suggested FLAC compression: {self._flac_compression_level}")
+    
+    def _analyze_conflicts(self):
+        """Analyze conflicts between source and target parameters"""
+        target_params = {
+            'target_format': self._target_format,
+            'target_sampling_transform': self._target_sampling_transform,
+            'aac_bitrate': self._aac_bitrate,
+            'flac_compression_level': self._flac_compression_level
+        }
+        
+        self._conflicts = ConflictAnalyzer.analyze_conflicts(self._quality_analysis, target_params)
+        
+        # Update can_be_imported based on blocking conflicts
+        if self._conflicts['blocking_conflicts']:
+            self._can_be_imported = False
+            logger.warning(f"Import blocked by conflicts: {self._conflicts['blocking_conflicts']}")
+        
+        logger.trace(f"Conflict analysis complete: {len(self._conflicts['blocking_conflicts'])} blocking, "
+                    f"{len(self._conflicts['quality_warnings'])} quality warnings, "
+                    f"{len(self._conflicts['efficiency_warnings'])} efficiency warnings")
+
+    # ================================================
+    # ENHANCED PRINT OUTPUT (__str__ method)
+    # ================================================
+    
+    def __str__(self) -> str:
+        """
+        Enhanced terminal output with quality analysis, suggestions, and warnings
+        """
+        return self._create_formatted_output()
+    
+    def _create_formatted_output(self) -> str:
+        """Create beautifully formatted terminal output"""
+        lines = []
+        
+        # Header with file info
+        lines.append("╭─ Audio File Analysis " + "─" * (60 - len("Audio File Analysis")) + "╮")
+        lines.append(f"│ File: {self._base_parameter.file.name:<45} │")
+        
+        file_size_mb = self._base_parameter.file_size_bytes / 1024 / 1024
+        lines.append(f"│ Size: {file_size_mb:.1f} MB, Container: {self._base_parameter.container_format_name:<25} │")
+        lines.append("├─ Audio Stream " + "─" * (60 - len("Audio Stream")) + "┤")
+        
+        # Primary audio stream info
+        if self._base_parameter.stream_parameters:
+            primary_stream = self._base_parameter.stream_parameters[0]
+            codec_name = primary_stream.codec_name or "unknown"
+            compression_type = self._quality_analysis.get('compression_type', AudioCompressionBaseType.UNKNOWN)
+            
+            # Format compression type display
+            compression_display = {
+                AudioCompressionBaseType.UNCOMPRESSED: "uncompressed",
+                AudioCompressionBaseType.LOSSLESS_COMPRESSED: "lossless",
+                AudioCompressionBaseType.LOSSY_COMPRESSED: "lossy",
+                AudioCompressionBaseType.UNKNOWN: "unknown"
+            }.get(compression_type, "unknown")
+            
+            lines.append(f"│ Codec: {codec_name} ({compression_display})" + " " * (60 - len(f"Codec: {codec_name} ({compression_display})") - 1) + "│")
+            
+            # Channels and sample rate
+            channels = primary_stream.nb_channels or 0
+            channel_text = f"{channels} channels" if channels != 2 else "stereo"
+            if channels == 1:
+                channel_text = "mono"
+            
+            sample_rate = primary_stream.sample_rate or 0
+            
+            # NEUE AUSGABE: Ultraschall-Kennzeichnung
+            if self._quality_analysis.get('is_ultrasound', False):
+                ultrasound_marker = " 🦇"  # Fledermaus-Symbol für Ultraschall
+            else:
+                ultrasound_marker = ""
+            
+            lines.append(f"│ Format: {channel_text}, {sample_rate:,} Hz{ultrasound_marker}" + " " * (60 - len(f"Format: {channel_text}, {sample_rate:,} Hz{ultrasound_marker}") - 1) + "│")
+            
+            # Bitrate and duration (if available)
+            if primary_stream.bit_rate:
+                bitrate_kbps = primary_stream.bit_rate // 1000
+                lines.append(f"│ Bitrate: {bitrate_kbps} kbps" + " " * (60 - len(f"Bitrate: {bitrate_kbps} kbps") - 1) + "│")
+            
+            if primary_stream.nb_samples and primary_stream.sample_rate:
+                duration_sec = primary_stream.nb_samples / primary_stream.sample_rate
+                duration_str = f"{int(duration_sec//60)}:{int(duration_sec%60):02d}.{int((duration_sec%1)*10)}"
+                lines.append(f"│ Duration: {duration_str}" + " " * (60 - len(f"Duration: {duration_str}") - 1) + "│")
+        
+        lines.append("├─ Recommended Import Settings " + "─" * (60 - len("Recommended Import Settings")) + "┤")
+        
+        # Show current/suggested parameters
+        if self._target_format:
+            status_icon = "✅" if 'target_format' in self._user_defined_params else "🔧"
+            format_name = self._target_format.name
+            lines.append(f"│ {status_icon} Target: {format_name:<40} │")
+        
+        if self._target_sampling_transform:
+            status_icon = "✅" if 'target_sampling_transform' in self._user_defined_params else "🔧"
+            transform_name = self._target_sampling_transform.name
+            lines.append(f"│ {status_icon} Sampling: {transform_name:<37} │")
+        
+        # Codec-specific parameters
+        if self._target_format and self._target_format.code == 'aac' and self._aac_bitrate:
+            status_icon = "✅" if 'aac_bitrate' in self._user_defined_params else "🔧"
+            bitrate_str = f"AAC {self._aac_bitrate//1000} kbps"
+            lines.append(f"│ {status_icon} Bitrate: {bitrate_str:<38} │")
+        
+        if self._target_format and self._target_format.code == 'flac':
+            status_icon = "✅" if 'flac_compression_level' in self._user_defined_params else "🔧"
+            compression_str = f"FLAC level {self._flac_compression_level}"
+            lines.append(f"│ {status_icon} Compression: {compression_str:<33} │")
+        
+        # Show reasoning if suggestions were applied
+        suggestions = QualityAnalyzer.suggest_target_parameters(self._quality_analysis)
+        if 'reason' in suggestions and not all(param in self._user_defined_params for param in ['target_format', 'aac_bitrate', 'flac_compression_level']):
+            lines.append("│ ┌─ Rationale " + "─" * (60 - len("Rationale") - 6) + "┐ │")
+            reason = suggestions['reason']
+            # Word wrap the reason text
+            reason_lines = self._wrap_text(reason, 44)
+            for reason_line in reason_lines:
+                lines.append(f"│ │ {reason_line:<44} │ │")
+            lines.append("│ └" + "─" * 46 + "┘ │")
+        
+        # Warnings and conflicts section
+        if self._conflicts:
+            if self._conflicts['quality_warnings'] or self._conflicts['efficiency_warnings'] or self._conflicts['blocking_conflicts']:
+                lines.append("├─ Warnings & Issues " + "─" * (60 - len("Warnings & Issues")) + "┤")
+                
+                # Blocking conflicts (critical)
+                for conflict in self._conflicts['blocking_conflicts']:
+                    wrapped_lines = self._wrap_text(f"🚫 {conflict}", 56)
+                    for line in wrapped_lines:
+                        lines.append(f"│ {line:<58} │")
+                
+                # Quality warnings
+                for warning in self._conflicts['quality_warnings']:
+                    wrapped_lines = self._wrap_text(f"⚠️  {warning}", 56)
+                    for line in wrapped_lines:
+                        lines.append(f"│ {line:<58} │")
+                
+                # Efficiency warnings
+                for warning in self._conflicts['efficiency_warnings']:
+                    wrapped_lines = self._wrap_text(f"💡 {warning}", 56)
+                    for line in wrapped_lines:
+                        lines.append(f"│ {line:<58} │")
+        
+        # Status section
+        lines.append("├─ Status " + "─" * (60 - len("Status")) + "┤")
+        if self._can_be_imported:
+            lines.append("│ 🟢 Ready for import" + " " * (60 - len("Ready for import") - 5) + "│")
+        else:
+            lines.append("│ 🔴 Import blocked - resolve conflicts above" + " " * (60 - len("Import blocked - resolve conflicts above") - 5) + "│")
+        
+        # Legend for icons
+        lines.append("│" + " " * 58 + "│")
+        legend_text = "Legend: ✅=User set, 🔧=Auto-suggested"
+        if self._quality_analysis.get('is_ultrasound', False):
+            legend_text += ", 🦇=Ultrasound"
+        lines.append(f"│ {legend_text}" + " " * (60 - len(legend_text) - 1) + "│")
+        
+        lines.append("╰" + "─" * 58 + "╯")
+        
+        return "\n".join(lines)
+    
+    def _wrap_text(self, text: str, width: int) -> List[str]:
+        """Wrap text to specified width, preserving words"""
+        import textwrap
+        return textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False)
+    
+    # ================================================
+    # EXISTING METHODS (kept for compatibility)
+    # ================================================
     
     def _validate_and_save_user_meta(self, user_meta: dict|None):
-        if not isinstance(user_meta, dict|None):
+        """Validate and save user metadata"""
+        if not isinstance(user_meta, (dict, type(None))):
             raise ValueError("Additional information, given as user_meta, must be structured as dictionary.")
         if user_meta is not None:
             logger.trace(f"user_meta value accepted: {user_meta}")
             self._user_meta = user_meta
-            return True # value set
-        return False # value not set
-
-    def _validate_and_save_target_format(self, target_format:str|None):
-        if not isinstance(target_format, (str, type(None))):
-            raise ValueError("Target format must be a string value or None.")
-
-        if target_format is not None:
-            try:
-                TargetFormats.from_string_or_enum(target_format)
-                self._target_format = target_format
-                return True
-            except (ValueError, TypeError) as e:
-                raise ValueError(f"Invalid target format '{target_format}': {e}")
-        
+            return True
         return False
-    
-    def _validate_and_save_selected_audio_streams(self, audio_stream_selection_list:int|list[int]|None):
+
+    def _validate_and_save_selected_audio_streams(self, audio_stream_selection_list: int|list[int]|None):
+        """Validate and save selected audio streams"""
         if audio_stream_selection_list is None:
-            return False # value not set
+            return False
         if isinstance(audio_stream_selection_list, int):
             audio_stream_selection_list = [audio_stream_selection_list]
         if not isinstance(audio_stream_selection_list, list):
-            raise ValueError("audio_stream_selection_list musst be int or list[int].")
+            raise ValueError("audio_stream_selection_list must be int or list[int].")
         if not all(isinstance(i, int) for i in audio_stream_selection_list):
             raise ValueError("audio_stream_selection_list: all elements must be integers.")
         if len(audio_stream_selection_list) < 1:
             raise ValueError("At least one audio stream selection needed.")
-        # ##################################################
-        #
+        
         # TODO for next versions: Accept and process more than one stream
         if len(audio_stream_selection_list) > 1:
             raise ValueError("More than exactly one selected audio stream not yet supported. But, planned for next versions.")
-        #
-        # ##################################################
+        
         self._base_parameter.selected_audio_streams = audio_stream_selection_list
-        return True # value set
+        return True
     
     def _extract_file_data(self):
-        """
-        Liest vollständige ffprobe-Daten und sortiert sie in die Datenstrukturen ein
-        """
-        logger.trace(f"Extraction of all meta information by ffprobe requested for file: {self._base_parameter.file.name}. See following steps.")
+        """Extract complete file metadata using ffprobe"""
+        logger.trace(f"Extracting metadata for file: {self._base_parameter.file.name}")
         try:
-            # Vollständiger ffprobe-Befehl für alle Informationen
             cmd = [
                 "ffprobe", "-v", "error",
-                "-show_format",      # Container-Level Informationen
-                "-show_streams",     # Stream-Level Informationen
-                "-show_chapters",    # Chapter-Informationen
-                "-show_programs",    # Program-Informationen (falls vorhanden)
-                "-of", "json",       # JSON-Output für einfache Verarbeitung
+                "-show_format",
+                "-show_streams", 
+                "-show_chapters",
+                "-show_programs",
+                "-of", "json",
                 str(self._base_parameter.file)
             ]
-            logger.trace(f"Call ffprobe for file {self._base_parameter.file.name} with command list: '{cmd}' as subprocess...")
-            try:
-                result = subprocess.run(
-                    cmd, 
-                    capture_output=True, 
-                    text=True, 
-                    check=True,
-                    timeout=30
-                )
-                logger.trace(f"ffprobe subprocess call finalized successfully.")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"ffprobe subprocess call failed with return code {e.returncode}")
-                logger.error(f"stdout: '{e.stdout}', stderr: '{e.stderr}'")
-                logger.error(f"File {self._base_parameter.file.name} could not be successfully analyzed before import.")
-                raise RuntimeError(f"Failed to analyze media file {self._base_parameter.file.name}") from e
-            except subprocess.TimeoutExpired as e:
-                logger.error(f"ffprobe timed out after 30 seconds for file {self._base_parameter.file.name}")
-                raise RuntimeError(f"Media file analysis timed out: {self._base_parameter.file.name}") from e
             
-            # JSON-Daten parsen
-            logger.trace(f"Parse for data in ffprobe response...")
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                check=True,
+                timeout=30
+            )
+            
             ffprobe_data = json.loads(result.stdout)
-            logger.trace(f"Parsing done.")
             
-            # Datenstrukturen füllen
-            logger.trace("Call extractors to read information from ffprobe results in detail.")
             self._extract_container_info(ffprobe_data, self._base_parameter.file.name)
             self._extract_stream_info(ffprobe_data, self._base_parameter.file.name)
             self._extract_general_meta(ffprobe_data, self._base_parameter.file.name)
             
         except subprocess.CalledProcessError as e:
-            raise ValueError(f"ffprobe-Analyse fehlgeschlagen: {e}")
-        except subprocess.TimeoutExpired:
-            raise ValueError(f"ffprobe-Timeout bei Datei: {self._base_parameter.file}")
+            logger.error(f"ffprobe failed with return code {e.returncode}")
+            raise RuntimeError(f"Failed to analyze media file {self._base_parameter.file.name}") from e
+        except subprocess.TimeoutExpired as e:
+            logger.error(f"ffprobe timed out after 30 seconds")
+            raise RuntimeError(f"Media file analysis timed out: {self._base_parameter.file.name}") from e
         except json.JSONDecodeError as e:
-            raise ValueError(f"Ungültige JSON-Ausgabe von ffprobe: {e}")
+            raise ValueError(f"Invalid JSON output from ffprobe: {e}")
         except Exception as e:
-            raise ValueError(f"Unerwarteter Fehler bei ffprobe-Analyse: {e}")
+            raise ValueError(f"Unexpected error during ffprobe analysis: {e}")
     
     def _extract_container_info(self, ffprobe_data: dict, file: str):
-        """
-        Extrahiert Container-Level Informationen aus ffprobe-Daten
-        
-        Args:
-            ffprobe_data: Vollständige ffprobe JSON-Daten
-            file: Dateiname für Logging
-        """
-        logger.trace(f"Extracting container information for file '{file}' requested.")
+        """Extract container-level information"""
+        logger.trace(f"Extracting container information for file '{file}'")
         format_info = ffprobe_data.get("format", {})
         
         self._base_parameter.container_format_name = format_info.get("format_name")
         self._container = {
-            # Basis Container-Informationen
             "format_name": format_info.get("format_name"),
             "format_long_name": format_info.get("format_long_name"),
             "duration": safe_float_conversion(format_info.get("duration")),
             "size": safe_int_conversion(format_info.get("size")),
             "bit_rate": safe_int_conversion(format_info.get("bit_rate")),
             "probe_score": safe_int_conversion(format_info.get("probe_score")),
-            
-            # Zusätzliche Container-Eigenschaften
             "start_time": safe_float_conversion(format_info.get("start_time")),
             "nb_streams": safe_int_conversion(format_info.get("nb_streams")),
             "nb_programs": safe_int_conversion(format_info.get("nb_programs"))
         }
-        logger.trace(f"Done: Extracting container information for file '{file}'.")
+        logger.trace(f"Container info extracted for file '{file}'")
     
     def _extract_stream_info(self, ffprobe_data: dict, file: str):
-        """
-        Extrahiert Stream-Level Informationen und trennt Audio- von Nicht-Audio-Streams
-        
-        Args:
-            ffprobe_data: Vollständige ffprobe JSON-Daten
-            file: Dateiname für Logging
-        """
+        """Extract stream-level information"""
         all_streams = ffprobe_data.get("streams", [])
         
-        # Reset der Stream-Listen
         self._audio_streams = []
         self._other_streams = []
         
         for stream_data in all_streams:
-            # Trennung nach Audio und Nicht-Audio mit spezifischen Funktionen
             if stream_data.get("codec_type") == "audio":
                 self._create_audio_stream_info_dict(stream_data, file)
             else:
                 self._create_other_stream_info_dict(stream_data, file)
                 
-        # Sortierung nach 'index' parameter:
+        # Sort by index
         self._audio_streams.sort(key=lambda x: x["index"] if x["index"] is not None else 999)
         self._other_streams.sort(key=lambda x: x["index"] if x["index"] is not None else 999)
     
-    def _create_audio_stream_info_dict(self, stream_data: dict, file: str) -> dict:
-        """
-        Erstellt ein standardisiertes Audio-Stream-Info Dictionary und füllt die Base-Parameter
+    def _create_audio_stream_info_dict(self, stream_data: dict, file: str):
+        """Create audio stream info dictionary"""
+        logger.trace(f"Extracting audio stream information of file '{file}'")
         
-        Args:
-            stream_data: Rohe Audio-Stream-Daten von ffprobe
-            file: Dateiname für Logging
-            
-        Returns:
-            Strukturiertes Audio-Stream-Info Dictionary
-        """
-        logger.trace(f"Extracting audio stream information of file '{file}'.")
-        self._audio_streams.append( {
-            # Stream-Identifikation
-            "index": safe_int_conversion(stream_data.get("index")),  # Sollte immer Integer sein
-            "id": stream_data.get("id"),  # data type can differ from container format to container format
-            
-            # Codec-Informationen
+        # Extract bitrate for quality analysis
+        bit_rate = safe_int_conversion(stream_data.get("bit_rate"))
+        
+        self._audio_streams.append({
+            "index": safe_int_conversion(stream_data.get("index")),
+            "id": stream_data.get("id"),
             "codec_name": stream_data.get("codec_name"),
             "codec_long_name": stream_data.get("codec_long_name"),
             "codec_type": stream_data.get("codec_type"),
             "codec_tag": stream_data.get("codec_tag"),
             "codec_tag_string": stream_data.get("codec_tag_string"),
-            
-            # Audio-Parameter (technische Eigenschaften)
             "sample_rate": safe_int_conversion(stream_data.get("sample_rate")),
             "sample_fmt": stream_data.get("sample_fmt"),
             "channels": safe_int_conversion(stream_data.get("channels")),
             "channel_layout": stream_data.get("channel_layout"),
             "bits_per_sample": safe_int_conversion(stream_data.get("bits_per_sample")),
-            "bit_rate": safe_int_conversion(stream_data.get("bit_rate")),
-            
-            # Timing-Informationen
+            "bit_rate": bit_rate,
             "duration": safe_float_conversion(stream_data.get("duration")),
             "start_time": safe_float_conversion(stream_data.get("start_time")),
             "time_base": stream_data.get("time_base"),
             "start_pts": safe_int_conversion(stream_data.get("start_pts")),
             "duration_ts": safe_int_conversion(stream_data.get("duration_ts")),
-            
-            # Stream-Eigenschaften
             "disposition": stream_data.get("disposition", {})
-        } )
+        })
+        
+        # Enhanced AudioStreamParameters with bitrate
         self._base_parameter.stream_parameters.append(
-                    AudioStreamParameters(index_of_stream_in_file=safe_int_conversion(stream_data.get("index")),
-                                          nb_channels=safe_int_conversion(stream_data.get("channels")),
-                                          sample_rate=safe_int_conversion(stream_data.get("sample_rate")),
-                                          sample_format=stream_data.get("sample_fmt"),
-                                          codec_name=stream_data.get("codec_name"),
-                                          nb_samples=self._calculate_total_samples(self._audio_streams[-1])
-                                          ))
+            AudioStreamParameters(
+                index_of_stream_in_file=safe_int_conversion(stream_data.get("index")),
+                nb_channels=safe_int_conversion(stream_data.get("channels")),
+                sample_rate=safe_int_conversion(stream_data.get("sample_rate")),
+                sample_format=stream_data.get("sample_fmt"),
+                codec_name=stream_data.get("codec_name"),
+                nb_samples=self._calculate_total_samples(self._audio_streams[-1]),
+                bit_rate=bit_rate  # NEW: Include bitrate
+            )
+        )
         self._base_parameter.total_nb_of_channels += safe_int_conversion(stream_data.get("channels"))
 
-    def _create_other_stream_info_dict(self, stream_data: dict, file: str) -> dict:
-        """
-        Erstellt ein standardisiertes Nicht-Audio-Stream-Info Dictionary
-        
-        Args:
-            stream_data: Rohe Nicht-Audio-Stream-Daten von ffprobe
-            file: Dateiname für Logging
-            
-        Returns:
-            Strukturiertes Nicht-Audio-Stream-Info Dictionary
-        """
-        logger.trace(f"Extracting non-audio stream information of file '{file}'.")
-        self._other_streams.append( {
-            # Stream-Identifikation
-            "index": safe_int_conversion(stream_data.get("index")),  # Sollte immer Integer sein
-            "id": stream_data.get("id"),  # data type can differ from container format to container format
-            
-            # Codec-Informationen
+    def _create_other_stream_info_dict(self, stream_data: dict, file: str):
+        """Create non-audio stream info dictionary"""
+        logger.trace(f"Extracting non-audio stream information of file '{file}'")
+        self._other_streams.append({
+            "index": safe_int_conversion(stream_data.get("index")),
+            "id": stream_data.get("id"),
             "codec_name": stream_data.get("codec_name"),
             "codec_long_name": stream_data.get("codec_long_name"),
             "codec_type": stream_data.get("codec_type"),
             "codec_tag": stream_data.get("codec_tag"),
             "codec_tag_string": stream_data.get("codec_tag_string"),
-            
-            # Timing-Informationen
             "duration": safe_float_conversion(stream_data.get("duration")),
             "start_time": safe_float_conversion(stream_data.get("start_time")),
             "time_base": stream_data.get("time_base"),
             "start_pts": safe_int_conversion(stream_data.get("start_pts")),
             "duration_ts": safe_int_conversion(stream_data.get("duration_ts")),
-            
-            # Stream-Eigenschaften
             "disposition": stream_data.get("disposition", {})
-        } )
+        })
     
     def _extract_general_meta(self, ffprobe_data: dict, file: str):
-        """
-        Extrahiert alle nicht-technischen Metadaten durch strukturellen Vergleich
-        
-        Kopiert die komplette ffprobe-Struktur und entfernt alle bereits
-        in _container und _audio_streams/_other_streams verarbeiteten Pfade.
-        
-        Args:
-            ffprobe_data: Vollständige ffprobe JSON-Daten
-            file: Dateiname für Logging
-        """
+        """Extract general metadata"""
         import copy
-        logger.trace(f"Extracting all the other information of file '{file}'.")
+        logger.trace(f"Extracting general metadata of file '{file}'")
         
-        # Vollständige Kopie der ffprobe-Daten als Ausgangsbasis
         self._general_meta = copy.deepcopy(ffprobe_data)
-        
-        # Entferne bereits verarbeitete Container-Pfade
         self._remove_processed_container_paths(self._general_meta)
-        
-        # Entferne bereits verarbeitete Stream-Pfade
         self._remove_processed_stream_paths(self._general_meta)
-        
-        # Füge Benutzerdefinierte Metadaten hinzu
         self._general_meta["user_meta"] = self._user_meta
     
     def _remove_processed_container_paths(self, meta_data: dict):
-        """
-        Entfernt bereits in _container verarbeitete Pfade aus meta_data
-        
-        Args:
-            meta_data: Meta-Daten Dictionary (wird modifiziert)
-        """
+        """Remove already processed container paths"""
         format_section = meta_data.get("format", {})
-        
-        # Liste der bereits verarbeiteten Container-Keys
         processed_container_keys = [
             "format_name", "format_long_name", "duration", "size", 
             "bit_rate", "probe_score", "start_time", "nb_streams", "nb_programs"
         ]
-        
-        # Entferne verarbeitete Keys aus format-Sektion
         for key in processed_container_keys:
             format_section.pop(key, None)
     
     def _remove_processed_stream_paths(self, meta_data: dict):
-        """
-        Entfernt bereits in _audio_streams/_other_streams verarbeitete Pfade
-        
-        Args:
-            meta_data: Meta-Daten Dictionary (wird modifiziert)
-        """
+        """Remove already processed stream paths"""
         streams_section = meta_data.get("streams", [])
-        
-        # Liste der bereits verarbeiteten Audio-Stream-Keys
         processed_audio_keys = [
             "index", "id", "codec_name", "codec_long_name", "codec_type",
             "codec_tag", "codec_tag_string", "sample_rate", "sample_fmt",
@@ -453,199 +1204,56 @@ class FileParameter:
             "duration", "start_time", "time_base", "start_pts", "duration_ts",
             "disposition"
         ]
-        
-        # Liste der bereits verarbeiteten Nicht-Audio-Stream-Keys
         processed_other_keys = [
             "index", "id", "codec_name", "codec_long_name", "codec_type",
             "codec_tag", "codec_tag_string", "duration",
             "start_time", "time_base", "start_pts", "duration_ts", "disposition"
         ]
         
-        # Bereinige jeden Stream
         for stream in streams_section:
             codec_type = stream.get("codec_type")
-            
             if codec_type == "audio":
-                # Entferne Audio-spezifische Keys
                 for key in processed_audio_keys:
                     stream.pop(key, None)
             else:
-                # Entferne Nicht-Audio-spezifische Keys
                 for key in processed_other_keys:
                     stream.pop(key, None)
      
-    def _calculate_total_samples(self, stream:dict) -> Optional[int]:
-        """
-        Berechnet die Gesamtzahl der Samples in einem Audio-Stream. Nutzt dabei die best möglichen
-        Methoden, um aus den Metadaten die Samplezahl zu berechnen. In absoluten Ausnahmefällen ist
-        es theoretisch möglich, dass die Samplezahl doch anders ist.
-        
-        Args:
-            audio_stream_index: Index im audio_streams Array (0 = erster Audio-Stream)
-                               NICHT der echte Stream-Index aus der Datei!
-            
-        Returns:
-            Anzahl Samples oder None wenn Berechnung nicht möglich
-        """
- 
-        # METHODE 1: duration_ts (BESTE - direkter Sample-Count)
+    def _calculate_total_samples(self, stream: dict) -> Optional[int]:
+        """Calculate total samples in audio stream"""
+        # Method 1: duration_ts (best - direct sample count)
         duration_ts = stream.get("duration_ts")
         time_base = stream.get("time_base")
         sample_rate = stream.get("sample_rate")
         
         if duration_ts and time_base and sample_rate:
             try:
-                # Parse time_base: "1/48000" → 1/48000
                 if '/' in str(time_base):
                     num, den = map(int, str(time_base).split('/'))
-                    # Wenn time_base = 1/sample_rate, dann duration_ts = samples
                     if den == sample_rate and num == 1:
-                        return duration_ts  # EXAKTE SAMPLE-ANZAHL!
+                        return duration_ts
             except (ValueError, ZeroDivisionError):
                 pass
         
-        # METHODE 2: duration * sample_rate (STANDARD - sehr gut)
+        # Method 2: duration * sample_rate (standard)
         duration = stream.get("duration")
         if duration and sample_rate:
-            return int(duration * sample_rate)  # SEHR ZUVERLÄSSIG
+            return int(duration * sample_rate)
         
-        # METHODE 3: Fallback für Container-Duration
+        # Method 3: Container duration fallback
         container_duration = self._container.get("duration")
         if container_duration and sample_rate:
             return int(container_duration * sample_rate)
         
         return None
-    #
-    # Ende of initialization part
-    #               
-    # ################################################
     
-
-    # ################################################
-    #
-    # Analyzing part
-    # --------------
-    #
-    def _analyze(self, target_format: str|None = None, audio_stream_selection_list: int|list[int]|None = None) -> bool:
-        """
-        Führt Import-Analyse durch und bestimmt Import-Bereitschaft
-        
-        Analysiert die relevanten Daten der übergebenen Audio-Streams:
-            - entnimmt die relevanten Daten des Audio-Streams mit dem kleinsten Index
-              (gewährleistet durch die Sortierung in '_extract_stream_info()')
-              - return False, wenn nicht alle Daten verfügbar sind
-            - falls mehr als nur ein Index übergeben wurde:
-                - vergleiche, ob die anderen Stream identische Parameter haben; Ausnahme: Kanalzahl
-                - return False, wenn Vergleich über alle Streams hinweg mindestens einmal nicht erfolgreich
-            alles ok: 
-                - erstelle self._base_parameter aus den relevanten Daten
-                - return True
-        
-        Args:
-            audio_stream_selection_list: Stream-Index(e) für die Analyse (echte ffprobe-Indizes)
-            
-        Returns:
-            True wenn Import möglich, False sonst
-        """
-        logger.trace(f"Import analysis requested for audio stream indices: {audio_stream_selection_list}")
-        self._can_be_imported = True
-        
-        if target_format is not None:
-            self._validate_and_save_target_format(target_format)
-        
-        if audio_stream_selection_list is not None:
-            self._validate_and_save_selected_audio_streams(audio_stream_selection_list)
-        
-        # check if selected audio stream exist in file
-        known_indices = [stream_parameter.index_of_stream_in_file for stream_parameter in self._base_parameter.stream_parameters]
-        for stream_index in self._base_parameter.selected_audio_streams:
-            if stream_index not in known_indices:
-                self._can_be_imported = False
-                logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Missing given audio stream index '{stream_index}' in Audio indices of file. Audio indices of file: {known_indices}")
-         
-        if not self._can_be_imported:
-            logger.trace("Break audio file analysis.")
-            return False
-        
-        # get list-index of selected audio stream parameters (not: stream index!)
-        selected_stream_parameter_indices = []
-        for i in range(len(self._base_parameter.stream_parameters)):
-            if self._base_parameter.stream_parameters[i].index_of_stream_in_file in self._base_parameter.selected_audio_streams:
-                selected_stream_parameter_indices.append(i)
-        
-        # count the total channels needed for import:
-        self._base_parameter.total_nb_of_channels_to_import = 0
-        for i in selected_stream_parameter_indices:
-            if isinstance(self._base_parameter.stream_parameters[i].nb_channels, int):
-                self._base_parameter.total_nb_of_channels_to_import += self._base_parameter.stream_parameters[i].nb_channels
-            else:
-                logger.error(f"Missing number of channels in requested audio stream {self._base_parameter.stream_parameters[i].index_of_stream_in_file}")
-                self._can_be_imported = False
-                break           
-                   
-        
-        # check compatibility if more than one stream:
-        if len(selected_stream_parameter_indices) > 1:
-            reference_stream_idx = selected_stream_parameter_indices[0]
-            for i in selected_stream_parameter_indices[1:]:  # Statt: if i > 1
-                if self._base_parameter.stream_parameters[reference_stream_idx].nb_samples != self._base_parameter.stream_parameters[i].nb_samples:
-                    logger.error("Number of samples in streams different. Can not import all channels as one record.")
-                    self._can_be_imported = False
-                    break                    
-                if self._base_parameter.stream_parameters[reference_stream_idx].sample_rate != self._base_parameter.stream_parameters[i].sample_rate:
-                    logger.error("Sampling rate in streams different. Can not import all channels as one record.")
-                    self._can_be_imported = False
-                    break
-
-        # check if codec can be encoded by ffmpeg
-        for i in selected_stream_parameter_indices:
-            codec_name = self._base_parameter.stream_parameters[i].codec_name
-            if not can_ffmpeg_decode_codec(codec_name):
-                self._can_be_imported = False
-                logger.error(f"Audio file '{str(self._base_parameter.file.name)}': Codec '{codec_name}' is not decodable by FFMPEG.")
-                break
-
-
-        if not self._can_be_imported:
-            logger.trace("Break audio file analysis.")
-            return False
-        
-        logger.trace(   f"Audio file '{str(self._base_parameter.file.name)}' analysis results: "
-                        f"file path={str(self._base_parameter.file.parent)}, "
-                        f"file size={self._base_parameter.file_size_bytes} bytes, "
-                        f"file hash={self._base_parameter.file_sh256}, "
-                        f"container format name={self._base_parameter.container_format_name}, "
-                        f"selected audio streams for import (indices):{self._base_parameter.selected_audio_streams}, "
-                        f"total number of selected audio channels={self._base_parameter.total_nb_of_channels_to_import}, "
-                        f"sample rate={self._base_parameter.stream_parameters[0].sample_rate/1000}kS/s, "
-                        f"samples={self._base_parameter.stream_parameters[0].nb_samples/1.0e6}MS, "
-                        f"Ready for import={self._can_be_imported}")
-
-        if self._can_be_imported:
-            logger.success(f"Audio file '{str(self._base_parameter.file.name)}': ✅ Import analysis successful. It is very likely that the file can be imported without errors.")
-            
-        return self._can_be_imported
-    
-    #
-    # End of analyzing part
-    #
-    # ##############################################################
-    
-    
-    # ##############################################################
-    #
-    # User API
-    # --------
-    #
-    # Properties (Setter, Getter)
-    #
+    # ================================================
+    # PUBLIC API PROPERTIES (Enhanced)
+    # ================================================
     
     @property
     def base_parameter(self) -> FileBaseParameters:
-        """Base parameters for import.
-        
-        All specific parameters used during import.
-        """
+        """Base parameters for import"""
         return self._base_parameter
     
     @property
@@ -655,19 +1263,20 @@ class FileParameter:
     
     @property
     def audio_streams(self) -> List[dict]:
-        """List of parameters of audio streams."""
+        """List of parameters of audio streams"""
         return [stream.copy() for stream in self._audio_streams]
     
     @property
-    def selected_audio_streams(self) -> List[dict]:
-        """List of parameters of pre-selected audio streams."""
+    def selected_audio_streams(self) -> List[AudioStreamParameters]:
+        """List of parameters of pre-selected audio streams"""
         if len(self._base_parameter.selected_audio_streams) < 1:
-            return {}
-        return [stream_parameter for stream_parameter in self._base_parameter.stream_parameters if stream_parameter.index_of_stream_in_file in self._base_parameter.selected_audio_streams]
+            return []
+        return [stream_parameter for stream_parameter in self._base_parameter.stream_parameters 
+                if stream_parameter.index_of_stream_in_file in self._base_parameter.selected_audio_streams]
     
     @property
     def other_streams(self) -> List[dict]:
-        """List of parameters of non-audio streams."""
+        """List of parameters of non-audio streams"""
         return [stream.copy() for stream in self._other_streams]
     
     @property
@@ -677,73 +1286,103 @@ class FileParameter:
     
     @property
     def user_meta(self) -> dict:
-        """User defined meta data."""
+        """User defined meta data"""
         return self._user_meta.copy()
     
     @user_meta.setter
-    def user_meta(self, user_meta:dict):
+    def user_meta(self, user_meta: dict):
+        """Set user meta data"""
         self._validate_and_save_user_meta(user_meta)
         logger.trace("user_meta data set.")
        
     @property
-    def target_format(self) -> str:
-        return self._target_format
-    
-    @target_format.setter 
-    def target_format(self, target_format:str):
-        self._validate_and_save_target_format(target_format)
-        logger.trace("target_format set. Re-run analyzer.")
-        self._analyse()
-    
-    @property
     def audio_stream_selection_list(self) -> list[int]:
-        """Selected audio streams in order to import"""
+        """Selected audio streams for import"""
         return self._base_parameter.selected_audio_streams.copy()
     
     @audio_stream_selection_list.setter
-    def audio_stream_selection_list(self, audio_stream_selection_list:list[int]):
+    def audio_stream_selection_list(self, audio_stream_selection_list: list[int]):
+        """Set selected audio streams and trigger re-analysis"""
         self._validate_and_save_selected_audio_streams(audio_stream_selection_list)
-        logger.trace("audio_stream_selection_list set. Re-run analyzer.")
-        self._analyse()
+        logger.trace("audio_stream_selection_list set. Re-running analysis.")
+        self._analyze()
     
     @property
-    def (self) -> bool:
-        """Flag if the import is permitted.
-        
-        Analyzing must have done with positive result.
-        """
-        return self._can_be_imported # True, if completed analysis was positive
+    def can_be_imported(self) -> bool:
+        """Flag if the import is permitted"""
+        return self._can_be_imported
 
     @property
     def has_audio(self) -> bool:
-        """Prüft ob Audio-Streams vorhanden sind"""
+        """Check if audio streams are present"""
         return len(self._audio_streams) > 0
     
     @property
     def number_of_audio_streams(self) -> int:
-        """Gibt die Anzahl der Audio-Streams zurück"""
+        """Number of audio streams"""
         return len(self._audio_streams)
     
-    #
-    # End of Properties
-    #
-    # User methods
-    #
+    # NEW: Quality and conflict properties
+    @property
+    def quality_analysis(self) -> dict:
+        """Quality analysis results"""
+        return self._quality_analysis.copy()
+    
+    @property
+    def conflicts(self) -> dict:
+        """Conflict analysis results"""
+        return self._conflicts.copy()
+    
+    @property
+    def has_blocking_conflicts(self) -> bool:
+        """Check if there are blocking conflicts"""
+        return bool(self._conflicts.get('blocking_conflicts', []))
+    
+    @property
+    def has_quality_warnings(self) -> bool:
+        """Check if there are quality warnings"""
+        return bool(self._conflicts.get('quality_warnings', []))
+    
+    @property
+    def has_efficiency_warnings(self) -> bool:
+        """Check if there are efficiency warnings"""
+        return bool(self._conflicts.get('efficiency_warnings', []))
+    
+    @property
+    def is_ultrasound_recording(self) -> bool:
+        """Check if this is an ultrasound recording (>96kHz)"""
+        return self._quality_analysis.get('is_ultrasound', False)
+    
+    # ================================================
+    # PUBLIC API METHODS
+    # ================================================
     
     def analyze(self, target_format: str|None = None, audio_stream_selection_list: int|list[int]|None = None) -> bool:
+        """Public method to trigger analysis"""
         return self._analyze(target_format, audio_stream_selection_list)
-    # 
-    # End of user methods
-    #
-    # End of User-API
     
+    def reset_suggestions(self):
+        """Reset all auto-suggested parameters to allow re-suggestion"""
+        self._user_defined_params.clear()
+        self._analyze()
+        logger.trace("All suggestions reset, re-analysis triggered")
     
+    def get_import_parameters(self) -> dict:
+        """Get all parameters needed for import process"""
+        return {
+            'target_format': self._target_format,
+            'target_sampling_transform': self._target_sampling_transform,
+            'aac_bitrate': self._aac_bitrate,
+            'flac_compression_level': self._flac_compression_level,
+            'selected_streams': self._base_parameter.selected_audio_streams.copy(),
+            'file_path': self._base_parameter.file,
+            'user_meta': self._user_meta.copy()
+        }
+
 
 # End of Class FileParameter
 #    
 # ############################################################
 # ############################################################
-    
-    
 
-logger.debug("Module loaded.")
+logger.trace("Enhanced FileParameter module loaded.")

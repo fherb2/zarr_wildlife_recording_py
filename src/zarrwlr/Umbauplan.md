@@ -2,6 +2,8 @@
 
 Nach der Implementierung der flac- und aac-Codec Prozeduren zur Ablage von Audio-Daten in eine Zarr3-Datenbank, soll nun die Ebene zum Nutzer und zur Zarr-Datenbank umgeschrieben werden. Das ist ehemals das, was bei aimport implementiert und von einigen anderen Funktionen/Python-Modulen unterstützt wurden.
 
+BEACHTE 'umbau_status.md' bezüglich aktualisierten und feiner spezifierten Anforderungen.
+
 Für den Umbau vorbereitet:
 
 ## audio_coding.py

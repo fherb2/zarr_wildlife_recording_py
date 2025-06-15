@@ -1,5 +1,3 @@
-
-
 from enum import Enum
 
 # ############################################################
@@ -46,32 +44,91 @@ class TargetFormats(Enum):
                             # (original remain preserved)
                             # compression: lossless, but only classic entropy
                             
-    def __init__(self, code, sample_rate):  # <-- Das war das Problem!
+    def __init__(self, code, sample_rate):
         self.code = code
         self.sample_rate = sample_rate
         
     @classmethod
     def from_string_or_enum(cls, value):
-        """Konvertiert String oder gibt Enum-Wert direkt zurück."""
+        """
+        Convert string to enum or return enum value directly.
+        
+        Supports flexible string input:
+        - Case insensitive: "flac", "FLAC", "Flac"
+        - With underscores: "flac_44100", "AAC_48000"
+        - Without underscores: "flac44100", "aac48000"
+        
+        Args:
+            value: String name or TargetFormats enum value
+            
+        Returns:
+            TargetFormats enum value
+            
+        Raises:
+            ValueError: If string doesn't match any format
+            TypeError: If value is neither string nor enum
+        """
         if isinstance(value, cls):
             return value
         elif isinstance(value, str):
+            # Normalize string: uppercase, handle various formats
+            normalized = value.upper().strip()
+            
+            # Try direct match first
             try:
-                return cls[value.upper()]
+                return cls[normalized]
             except KeyError:
-                raise ValueError(f"Unknown target format: {value}")
+                pass
+            
+            # Try with underscore if missing
+            if '_' not in normalized and any(c.isdigit() for c in normalized):
+                # Extract codec and sample rate from string like "flac44100"
+                for i, char in enumerate(normalized):
+                    if char.isdigit():
+                        codec_part = normalized[:i]
+                        rate_part = normalized[i:]
+                        if codec_part and rate_part:
+                            try:
+                                return cls[f"{codec_part}_{rate_part}"]
+                            except KeyError:
+                                pass
+                        break
+            
+            # Try without sample rate (just codec)
+            base_codecs = ['FLAC', 'AAC', 'NUMPY']
+            for codec in base_codecs:
+                if normalized.startswith(codec):
+                    # Check if it's just the codec name
+                    if normalized == codec:
+                        return cls[codec]
+                    # Or codec with rate
+                    rate_part = normalized[len(codec):].lstrip('_')
+                    if rate_part.isdigit():
+                        try:
+                            return cls[f"{codec}_{rate_part}"]
+                        except KeyError:
+                            pass
+            
+            # If all else fails, provide helpful error
+            available_formats = [e.name for e in cls]
+            raise ValueError(
+                f"Unknown target format: '{value}'. "
+                f"Available formats: {', '.join(available_formats)}"
+            )
         else:
             raise TypeError(f"Expected str or {cls.__name__}, got {type(value)}")
         
+    @staticmethod
     def auto_convert_format(func):
+        """Decorator for automatic format conversion"""
         def wrapper(target_format, *args, **kwargs):
-            # Automatische Konvertierung hier:
             converted_format = TargetFormats.from_string_or_enum(target_format)
             return func(converted_format, *args, **kwargs)
         return wrapper
 
     @auto_convert_format
-    def process_audio(target_format):  # Bekommt immer ein Enum
+    def process_audio(target_format):
+        """Example usage with decorator"""
         print(f"Processing: {target_format.code}")
 #
 # End of Class TargetFormats
@@ -116,26 +173,102 @@ class TargetSamplingTransforming(Enum):
         
     @classmethod
     def from_string_or_enum(cls, value):
-        """Konvertiert String oder gibt Enum-Wert direkt zurück."""
+        """
+        Convert string to enum or return enum value directly.
+        
+        Supports flexible string input:
+        - Case insensitive: "exactly", "EXACTLY", "Exactly"
+        - With underscores: "resampling_44100", "REINTERPRETING_48000"
+        - Partial matches: "resampling" (defaults to RESAMPLING_NEAREST)
+        
+        Args:
+            value: String name or TargetSamplingTransforming enum value
+            
+        Returns:
+            TargetSamplingTransforming enum value
+            
+        Raises:
+            ValueError: If string doesn't match any transform
+            TypeError: If value is neither string nor enum
+        """
         if isinstance(value, cls):
             return value
         elif isinstance(value, str):
+            # Normalize string: uppercase, handle various formats
+            normalized = value.upper().strip()
+            
+            # Try direct match first
             try:
-                return cls[value.upper()]
+                return cls[normalized]
             except KeyError:
-                raise ValueError(f"Unknown target format: {value}")
+                pass
+            
+            # Handle special cases and partial matches
+            if normalized == "EXACTLY":
+                return cls.EXACTLY
+            elif normalized in ["RESAMPLING", "RESAMPLE"]:
+                return cls.RESAMPLING_NEAREST
+            elif normalized in ["REINTERPRETING", "REINTERPRET"]:
+                return cls.REINTERPRETING_AUTO
+            
+            # Try with underscore if missing for rate-specific transforms
+            if '_' not in normalized and any(c.isdigit() for c in normalized):
+                # Extract method and sample rate from string like "resampling44100"
+                for method_prefix in ["RESAMPLING", "REINTERPRETING"]:
+                    if normalized.startswith(method_prefix):
+                        rate_part = normalized[len(method_prefix):]
+                        if rate_part.isdigit():
+                            try:
+                                return cls[f"{method_prefix}_{rate_part}"]
+                            except KeyError:
+                                pass
+            
+            # Try partial matching for method types
+            method_mapping = {
+                "EXACT": cls.EXACTLY,
+                "RESAMPLE": cls.RESAMPLING_NEAREST,
+                "REINTERPRET": cls.REINTERPRETING_AUTO
+            }
+            
+            for key, enum_val in method_mapping.items():
+                if normalized.startswith(key):
+                    # Check if there's a rate specified
+                    remainder = normalized[len(key):].lstrip('_')
+                    if not remainder:
+                        return enum_val
+                    elif remainder.isdigit():
+                        # Try to find specific rate version
+                        if key == "RESAMPLE":
+                            try:
+                                return cls[f"RESAMPLING_{remainder}"]
+                            except KeyError:
+                                pass
+                        elif key == "REINTERPRET":
+                            try:
+                                return cls[f"REINTERPRETING_{remainder}"]
+                            except KeyError:
+                                pass
+            
+            # If all else fails, provide helpful error
+            available_transforms = [e.name for e in cls]
+            raise ValueError(
+                f"Unknown sampling transform: '{value}'. "
+                f"Available transforms: {', '.join(available_transforms)}"
+            )
         else:
             raise TypeError(f"Expected str or {cls.__name__}, got {type(value)}")
         
+    @staticmethod
     def auto_convert_format(func):
+        """Decorator for automatic format conversion"""
         def wrapper(target_format, *args, **kwargs):
-            # Automatische Konvertierung hier:
-            converted_format = TargetFormats.from_string_or_enum(target_format)
+            converted_format = TargetSamplingTransforming.from_string_or_enum(target_format)
             return func(converted_format, *args, **kwargs)
         return wrapper
 
     @auto_convert_format
-    def process_audio(target_format):  # Bekommt immer ein Enum
+    def process_sampling(target_format):
+        """Example usage with decorator"""
         print(f"Processing: {target_format.code}")
 #
 # End of Class TargetSamplingTransforming
@@ -167,8 +300,8 @@ class AudioCompressionBaseType(Enum):
 # ############################################################
 # ############################################################
 #
-# Method audio_codec_compression()
-# ================================
+# Method get_audio_codec_compression_type()
+# ==========================================
 #
 # Recognises AudioCompressionBaseType from audio codec_name
 #
@@ -324,8 +457,12 @@ def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseTyp
     
     # Unbekannter Codec
     return AudioCompressionBaseType.UNKNOWN
+
+# Backward compatibility alias
+audio_codec_compression = get_audio_codec_compression_type
+
 #
-# End of Method audio_codec_compression()
+# End of Method get_audio_codec_compression_type()
 #
 # ############################################################
 # ############################################################
