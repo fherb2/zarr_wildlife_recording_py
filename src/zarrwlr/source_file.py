@@ -132,22 +132,22 @@ class QualityAnalyzer:
         """
         
         if channels == 1:  # Mono
-            if bitrate < 86000:      # Deine Grenze für kritisch
+            if bitrate < 86000:      # that can be critical for environment sound analysis
                 return 'low'
             elif bitrate < 128000:
                 return 'medium' 
-            elif bitrate < 196000:   # Deine neue Grenze
+            elif bitrate < 196000:
                 return 'high'
             else:
                 return 'excessive'
         
         elif channels == 2:  # Stereo - nicht einfach durch 2 teilen!
             # AAC Stereo-Effizienz: ~1.3-1.6x statt 2x Mono-Bitrate
-            if bitrate < 110000:     # ~86k * 1.3 (Inter-channel Effizienz)
+            if bitrate < 110000:     
                 return 'low'
-            elif bitrate < 170000:   # ~128k * 1.3
+            elif bitrate < 159000:   
                 return 'medium'
-            elif bitrate < 250000:   # ~196k * 1.3  
+            elif bitrate < 225000:  
                 return 'high'
             else:
                 return 'excessive'
@@ -175,14 +175,8 @@ class QualityAnalyzer:
         if is_ultrasound:
             return 'ultrasound'
         
-        if compression == AudioCompressionBaseType.UNCOMPRESSED:
-            if sample_rate >= 96000:
-                return 'studio'
-            elif sample_rate >= 48000:
-                return 'high'
-            else:
-                return 'standard'
-        elif compression == AudioCompressionBaseType.LOSSLESS_COMPRESSED:
+        if    compression == AudioCompressionBaseType.UNCOMPRESSED \
+           or compression == AudioCompressionBaseType.LOSSLESS_COMPRESSED:
             if sample_rate >= 96000:
                 return 'studio'
             elif sample_rate >= 48000:
@@ -213,7 +207,7 @@ class QualityAnalyzer:
         
         suggestions = {}
         
-        # NEUE LOGIK: Ultraschall-Detection zuerst prüfen
+        # ultrasonic is a special case 
         if QualityAnalyzer._is_ultrasound_recording(sample_rate):
             suggestions.update(QualityAnalyzer._suggest_ultrasound_parameters(quality_analysis))
             
@@ -234,12 +228,12 @@ class QualityAnalyzer:
     @staticmethod
     def _suggest_ultrasound_parameters(quality_analysis: dict) -> dict:
         """
-        NEUE METHODE: Spezielle Behandlung für Ultraschallaufnahmen
+        Spezielle Behandlung für Ultraschallaufnahmen
         
         Regeln:
         - Lossless Quelle → FLAC mit exakter Sample Rate beibehalten
         - Lossy gewünscht → Reinterpretation auf 32kS/s (NIEMALS Resampling!)
-        - Sample Rate > 655kHz → FLAC-Limit überschritten, spezielle Behandlung
+        - Sample Rate > 655kHz → FLAC-Limit überschritten, spezielle Behandlung: Reinterpretation
         """
         compression = quality_analysis['compression_type']
         sample_rate = quality_analysis.get('sample_rate', 96000)
@@ -257,10 +251,10 @@ class QualityAnalyzer:
             else:
                 # Über FLAC-Limit → spezielle Behandlung nötig
                 return {
-                    'target_format': TargetFormats.FLAC_192000,
-                    'target_sampling_transform': TargetSamplingTransforming.RESAMPLING_192000,
+                    'target_format': TargetFormats.FLAC_96000,
+                    'target_sampling_transform': TargetSamplingTransforming.REINTERPRETING_96000,
                     'flac_compression_level': 6,
-                    'reason': f'Ultraschall {sample_rate//1000}kHz überschreitet FLAC-Limit → Resampling auf 192kHz'
+                    'reason': f'Ultraschall {sample_rate//1000}kHz überschreitet FLAC-Limit → Re-Interpreting auf 96kHz'
                 }
         
         # Für Lossy-Quellen oder wenn Lossy explizit gewünscht
@@ -276,14 +270,13 @@ class QualityAnalyzer:
     def _suggest_aac_upgrade(quality_analysis: dict) -> dict:
         """Suggest AAC parameters for lossy source upgrade"""
         original_bitrate = quality_analysis.get('bit_rate', 128000)
-        channels = quality_analysis.get('channels', 2)
         sample_rate = quality_analysis.get('sample_rate', 44100)
         
-        # Increase bitrate by 25-40% to compensate for re-encoding loss
+        # Increase bitrate by 10-40% to compensate for re-encoding loss
         if original_bitrate < 128000:
-            target_bitrate = min(original_bitrate * 1.4, 192000)  # Significant boost for low quality
+            target_bitrate = min(original_bitrate * 1.3, 192000)  # Significant boost for low quality
         else:
-            target_bitrate = min(original_bitrate * 1.25, 320000)  # Moderate boost for good quality
+            target_bitrate = min(original_bitrate * 1.15, 320000)  # Moderate boost for good quality
         
         # Choose appropriate AAC format based on sample rate
         if sample_rate <= 48000:
@@ -310,7 +303,7 @@ class QualityAnalyzer:
         """
         sample_rate = quality_analysis.get('sample_rate', 44100)
         
-        # NEUE PRÜFUNG: Ultraschall-Bereich?
+        # Ultraschall-Bereich?
         if QualityAnalyzer._is_ultrasound_recording(sample_rate):
             # Delegiere an Ultraschall-Logik
             return QualityAnalyzer._suggest_ultrasound_parameters(quality_analysis)
@@ -335,8 +328,8 @@ class QualityAnalyzer:
             target_format = TargetFormats.FLAC_192000
             return {
                 'target_format': target_format,
-                'target_sampling_transform': TargetSamplingTransforming.RESAMPLING_192000,
-                'reason': f'Sample rate {sample_rate//1000}kHz exceeds FLAC limit → resample to 192kHz'
+                'target_sampling_transform': TargetSamplingTransforming.REINTERPRETING_96000,
+                'reason': f'Sample rate {sample_rate//1000}kHz exceeds FLAC limit → reinterprete to 96kHz'
             }
         
         return {
@@ -353,7 +346,7 @@ class QualityAnalyzer:
         channels = quality_analysis.get('channels', 2)
         
         # Conservative high-quality AAC
-        bitrate = 192000 if channels == 2 else 128000
+        bitrate = 192000 if channels == 2 else 160000
         
         if sample_rate == 44100:
             target_format = TargetFormats.AAC_44100
