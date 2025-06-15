@@ -1,11 +1,14 @@
-"""Mixed general helpers of Zarr Wildlife Recording library"""
+"""Mixed general helpers of Zarr Wildlife Recording Package"""
 
+import subprocess
+import re
 import zarr
 import numpy as np
 from pathlib import Path
 from io import BufferedReader
 import os
 from types import MappingProxyType
+from typing import Any, Optional
 from collections.abc import Mapping
 
 # import and initialize logging
@@ -219,14 +222,80 @@ def assert_zarr_snapshot_equals(actual: dict, expected: dict, path=""):
         if actual != expected:
             raise AssertionError(f"Value mismatch at {path or '<root>'}: {actual!r} != {expected!r}")
 
-def safe_int_conversion(value, default=0):
-    """Safe conversion with default value."""
+def safe_int_conversion(value: Any) -> Optional[int]:
+    """
+    Sichere Konvertierung zu int mit None-Fallback
+    
+    Args:
+        value: Zu konvertierender Wert
+        
+    Returns:
+        int oder None
+    """
+    if value is None or value == "":
+        return None
+    
     try:
-        if value is None or value == "":
-            return default
+        if isinstance(value, str):
+            # Entferne mögliche Einheiten oder Zusätze
+            cleaned = value.split()[0] if ' ' in value else value
+            return int(float(cleaned))  # float() für Dezimalzahlen als Strings
         return int(value)
     except (ValueError, TypeError):
-        return default
+        return None
+
+def safe_float_conversion(value: Any) -> Optional[float]:
+    """
+    Sichere Konvertierung zu float mit None-Fallback
+    
+    Args:
+        value: Zu konvertierender Wert
+        
+    Returns:
+        float oder None
+    """
+    if value is None or value == "":
+        return None
+    
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def check_ffmpeg_tools():
+    """Check if ffmpeg and ffprobe are installed and callable."""
+    logger.trace("'Check for ffmpeg-Tools' requested. Typical position for this during import.")
+    tools = ["ffmpeg", "ffprobe"]
+    logger.trace("Check avalability of ffmpeg and ffprobe tools during import of module...")
+
+    for tool in tools:
+        try:
+            subprocess.run([tool, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logger.error(f"Missing Command line tool {tool}. Please install ist.")
+            exit(1)
+    logger.success("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
+
+
+
+def can_ffmpeg_decode_codec(codec_name:str) -> bool:
+    """Check if a codec can be decoded by installes ffmpeg version."""
+    try:
+        # Alle verfügbaren Decoder auflisten
+        result = subprocess.run(['ffmpeg', '-decoders'], 
+                              capture_output=True, text=True, check=True)
+        
+        # Nach dem Codec suchen (case-insensitive)
+        pattern = rf'\b{re.escape(codec_name)}\b'
+        return bool(re.search(pattern, result.stdout, re.IGNORECASE))
+        
+    except subprocess.CalledProcessError:
+        return False
+    except FileNotFoundError:
+        print("ffmpeg nicht gefunden")
+        return False
+
 
 
 logger.debug("Module loaded.")

@@ -50,7 +50,8 @@ Additionally:
 - Access to the audio and metadata is via the package's API. Users do not need to be familiar with the structure used. If the audio data can be structured completely flat (via index), the user does not need any knowledge of the database used.
 
 With Zarr databases, access can also take place within the database structure at a group level. Therefore:
-- The Zarr database used here can be part of a larger storage system. When using the API, the user is free to connect to different locations in the Zarr storage system, which means that deeper data structuring by the user is possible at any time. The API of the package then works flat in this mount point, but also builds a structure for its data, since metadata and an index for granular access are created in addition to the pure audio data as an array. In such a use case, the user needs basic knowledge of the Zarr database system. This is made easier for the user by the fact that Zarr itself has a concise and clear API that does not require in-depth IT knowledge.
+
+- The Zarr database as used here, can be part of a larger storage system. When using the API, the user is free to connect to different locations in the Zarr storage system, which means that deeper data structuring by the user is possible at any time. The API of the package then works flat in this mount point, but also builds a structure for its data, since metadata and an index for granular access are created in addition to the pure audio data as an array. In such a use case, the user needs basic knowledge of the Zarr database system. This is made easier for the user by the fact that Zarr itself has a concise and clear API that does not require in-depth IT knowledge.
 
 #### Audio Inside Data Base
 

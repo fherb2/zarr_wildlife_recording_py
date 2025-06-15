@@ -33,7 +33,7 @@ from .aac_access import (
     parallel_extract_audio_segments_aac
 )
 
-from .utils import next_numeric_group_name, remove_zarr_group_recursive, safe_int_conversion  # noqa: E402
+from .utils import check_ffmpeg_tools, next_numeric_group_name, remove_zarr_group_recursive, safe_int_conversion  # noqa: E402
 from .config import Config  # noqa: E402
 from .exceptions import Doublet, ZarrComponentIncomplete, ZarrComponentVersionError, ZarrGroupMismatch, OggImportError  # noqa: E402
 from .packagetypes import AudioFileBaseFeatures, AudioCompression, AudioSampleFormatMap  # noqa: E402
@@ -880,23 +880,7 @@ def test_aac_integration():
         logger.error(f"AAC integration test failed: {e}")
         return False
 
-
-
-def _check_ffmpeg_tools():
-    """Check if ffmpeg and ffprobe are installed and callable."""
-    logger.trace("'Check for ffmpeg-Tools' requested. Typical position for this during import.")
-    tools = ["ffmpeg", "ffprobe"]
-    logger.trace("Check avalability of ffmpeg and ffprobe tools during import of module...")
-
-    for tool in tools:
-        try:
-            subprocess.run([tool, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.error(f"Missing Command line tool {tool}. Please install ist.")
-            exit(1)
-    logger.success("ffmpeg and ffprobe tools: Installed and successfully checked: Ok.")
-
+# We do this check during import to brake the program if ffmpeg is missing as soon as possible.
+check_ffmpeg_tools()
 
 logger.debug("Module loaded.")
-# We do this check during import:
-_check_ffmpeg_tools()
