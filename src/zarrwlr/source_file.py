@@ -861,243 +861,279 @@ class FileParameter:
         """
         return self._create_formatted_output()
     
-    def _create_formatted_output(self) -> str:
-        """Create beautifully formatted terminal output - METADATA FIRST, IMPORT LAST"""
-        lines = []
-        
-        # Header with basic file info
-        lines.append("╭─ Audio File Analysis " + "─" * (60 - len("Audio File Analysis")) + "╮")
-        lines.append(f"│ File: {self._base_parameter.file.name:<45} │")
-        
-        file_size_mb = self._base_parameter.file_size_bytes / 1024 / 1024
-        lines.append(f"│ Size: {file_size_mb:.1f} MB, Container: {self._base_parameter.container_format_name:<25} │")
-        lines.append(f"│ SHA256: {self._base_parameter.file_sh256[:20]}..." + " " * (60 - len(f"SHA256: {self._base_parameter.file_sh256[:20]}...") - 1) + "│")
-        
-        # ================================================
-        # CONTAINER METADATA SECTION
-        # ================================================
-        lines.append("├─ Container Metadata " + "─" * (60 - len("Container Metadata")) + "┤")
-        
-        container = self._container
-        if container.get('format_long_name'):
-            format_long = container['format_long_name'][:40] + "..." if len(container['format_long_name']) > 40 else container['format_long_name']
-            lines.append(f"│ Format: {format_long:<47} │")
-        
-        if container.get('duration'):
-            duration = container['duration']
-            duration_str = f"{int(duration//3600):02d}:{int((duration%3600)//60):02d}:{int(duration%60):02d}.{int((duration%1)*100):02d}"
-            lines.append(f"│ Duration: {duration_str:<45} │")
-        
-        if container.get('bit_rate'):
-            total_bitrate = container['bit_rate'] // 1000
-            lines.append(f"│ Total Bitrate: {total_bitrate} kbps" + " " * (60 - len(f"Total Bitrate: {total_bitrate} kbps") - 1) + "│")
-        
-        if container.get('nb_streams'):
-            lines.append(f"│ Streams: {container['nb_streams']} total" + " " * (60 - len(f"Streams: {container['nb_streams']} total") - 1) + "│")
-        
-        # Template-style API access hint
-        api_hint = "📝 <your_instance>.container['format_name']"
-        lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
-        
-        # ================================================
-        # AUDIO STREAMS DETAIL SECTION
-        # ================================================
-        lines.append("├─ Audio Streams Detail " + "─" * (60 - len("Audio Streams Detail")) + "┤")
-        
-        for i, stream in enumerate(self._audio_streams):
-            stream_marker = "→" if stream['index'] in self._base_parameter.selected_audio_streams else " "
-            lines.append(f"│{stream_marker}Stream #{stream['index']}: {stream['codec_name'] or 'unknown'}" + " " * max(1, 60 - len(f"{stream_marker}Stream #{stream['index']}: {stream['codec_name'] or 'unknown'}") - 1) + "│")
-            
-            # Basic stream info
-            channels = stream.get('channels', 0)
-            sample_rate = stream.get('sample_rate', 0)
-            channel_text = f"{channels} channels" if channels != 2 else "stereo"
-            if channels == 1:
-                channel_text = "mono"
-            
-            # Ultraschall-Kennzeichnung für Streams
-            ultrasound_marker = " 🦇" if sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD else ""
-            lines.append(f"│  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}" + " " * max(1, 60 - len(f"  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}") - 1) + "│")
-            
-            # Channel layout
-            if stream.get('channel_layout') and stream['channel_layout'] != 'stereo' and stream['channel_layout'] != 'mono':
-                layout = stream['channel_layout'][:35] + "..." if len(stream['channel_layout']) > 35 else stream['channel_layout']
-                lines.append(f"│  Layout: {layout:<45} │")
-            
-            # Sample format and bits per sample
-            if stream.get('sample_fmt') or stream.get('bits_per_sample'):
-                sample_info = f"{stream.get('sample_fmt', 'unknown')}"
-                if stream.get('bits_per_sample'):
-                    sample_info += f", {stream['bits_per_sample']} bits"
-                lines.append(f"│  Sample: {sample_info:<45} │")
-            
-            # Stream-specific bitrate
-            if stream.get('bit_rate'):
-                stream_bitrate = stream['bit_rate'] // 1000
-                lines.append(f"│  Bitrate: {stream_bitrate} kbps" + " " * (60 - len(f"  Bitrate: {stream_bitrate} kbps") - 1) + "│")
-            
-            # Disposition flags (if any interesting ones)
-            if stream.get('disposition'):
-                disp_flags = []
-                for key, value in stream['disposition'].items():
-                    if value and key in ['default', 'forced', 'comment', 'lyrics', 'karaoke']:
-                        disp_flags.append(key)
-                if disp_flags:
-                    flags_str = ', '.join(disp_flags)[:40]
-                    lines.append(f"│  Flags: {flags_str:<47} │")
-            
-            if i < len(self._audio_streams) - 1:  # Add separator between streams
-                lines.append("│" + "─" * 58 + "│")
-        
-        # Template-style API access hint for audio streams
-        api_hint = "📝 <your_instance>.audio_streams[0]['codec_name']"
-        lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
-        
-        # ================================================
-        # OTHER STREAMS SECTION (if any)
-        # ================================================
-        if self._other_streams:
-            lines.append("├─ Other Streams " + "─" * (60 - len("Other Streams")) + "┤")
-            
-            for stream in self._other_streams:
-                codec_type = stream.get('codec_type', 'unknown')
-                codec_name = stream.get('codec_name', 'unknown')
-                lines.append(f"│ Stream #{stream['index']}: {codec_type} ({codec_name})" + " " * max(1, 60 - len(f"Stream #{stream['index']}: {codec_type} ({codec_name})") - 1) + "│")
-            
-            # Template-style API access hint
-            api_hint = "📝 <your_instance>.other_streams[0]['codec_type']"
-            lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
-        
-        # ================================================
-        # METADATA TAGS SECTION (if available)
-        # ================================================
-        format_tags = self._general_meta.get('format', {}).get('tags', {})
-        if format_tags:
-            lines.append("├─ Metadata Tags " + "─" * (60 - len("Metadata Tags")) + "┤")
-            
-            # Show most important tags
-            important_tags = ['title', 'artist', 'album', 'date', 'genre', 'comment']
-            shown_tags = 0
-            for tag in important_tags:
-                if tag in format_tags and shown_tags < 4:  # Limit to 4 tags to save space
-                    value = str(format_tags[tag])[:35] + "..." if len(str(format_tags[tag])) > 35 else str(format_tags[tag])
-                    lines.append(f"│ {tag.capitalize()}: {value:<{50-len(tag)}} │")
-                    shown_tags += 1
-            
-            # Show total count if more tags exist
-            total_tags = len(format_tags)
-            if total_tags > shown_tags:
-                lines.append(f"│ ... and {total_tags - shown_tags} more tags" + " " * (60 - len(f"... and {total_tags - shown_tags} more tags") - 1) + "│")
-            
-            # Template-style API access hint
-            api_hint = "📝 <your_instance>.general_meta['format']['tags']"
-            lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
-        
-        # ================================================
-        # IMPORT SETTINGS - AM ENDE! (Most important for user)
-        # ================================================
-        lines.append("├─ Recommended Import Settings " + "─" * (60 - len("Recommended Import Settings")) + "┤")
-        
-        # Primary audio stream info for import
-        if self._base_parameter.stream_parameters:
-            primary_stream = self._base_parameter.stream_parameters[0]
-            codec_name = primary_stream.codec_name or "unknown"
-            compression_type = self._quality_analysis.get('compression_type', AudioCompressionBaseType.UNKNOWN)
-            
-            # Format compression type display
-            compression_display = {
-                AudioCompressionBaseType.UNCOMPRESSED: "uncompressed",
-                AudioCompressionBaseType.LOSSLESS_COMPRESSED: "lossless",
-                AudioCompressionBaseType.LOSSY_COMPRESSED: "lossy",
-                AudioCompressionBaseType.UNKNOWN: "unknown"
-            }.get(compression_type, "unknown")
-            
-            lines.append(f"│ Source: {codec_name} ({compression_display})" + " " * (60 - len(f"Source: {codec_name} ({compression_display})") - 1) + "│")
-        
-        # Show current/suggested parameters
-        if self._target_format:
-            status_icon = "✅" if 'target_format' in self._user_defined_params else "🔧"
-            format_name = self._target_format.name
-            lines.append(f"│ {status_icon} Target: {format_name:<40} │")
-        
-        if self._target_sampling_transform:
-            status_icon = "✅" if 'target_sampling_transform' in self._user_defined_params else "🔧"
-            transform_name = self._target_sampling_transform.name
-            lines.append(f"│ {status_icon} Sampling: {transform_name:<37} │")
-        
-        # Codec-specific parameters
-        if self._target_format and self._target_format.code == 'aac' and self._aac_bitrate:
-            status_icon = "✅" if 'aac_bitrate' in self._user_defined_params else "🔧"
-            bitrate_str = f"AAC {self._aac_bitrate//1000} kbps"
-            lines.append(f"│ {status_icon} Bitrate: {bitrate_str:<38} │")
-        
-        if self._target_format and self._target_format.code == 'flac':
-            status_icon = "✅" if 'flac_compression_level' in self._user_defined_params else "🔧"
-            compression_str = f"FLAC level {self._flac_compression_level}"
-            lines.append(f"│ {status_icon} Compression: {compression_str:<33} │")
-        
-        # Show reasoning if suggestions were applied
-        suggestions = QualityAnalyzer.suggest_target_parameters(self._quality_analysis)
-        if 'reason' in suggestions and not all(param in self._user_defined_params for param in ['target_format', 'aac_bitrate', 'flac_compression_level']):
-            lines.append("│ ┌─ Rationale " + "─" * (60 - len("Rationale") - 6) + "┐ │")
-            reason = suggestions['reason']
-            # Word wrap the reason text
-            reason_lines = self._wrap_text(reason, 44)
-            for reason_line in reason_lines:
-                lines.append(f"│ │ {reason_line:<44} │ │")
-            lines.append("│ └" + "─" * 46 + "┘ │")
-        
-        # API access hints for import parameters
-        lines.append(f"│ 📝 <your_instance>.target_format" + " " * (60 - len("📝 <your_instance>.target_format") - 1) + "│")
-        lines.append(f"│ 📝 <your_instance>.get_import_parameters()" + " " * (60 - len("📝 <your_instance>.get_import_parameters()") - 1) + "│")
-        
-        # Warnings and conflicts section
-        if self._conflicts:
-            if self._conflicts['quality_warnings'] or self._conflicts['efficiency_warnings'] or self._conflicts['blocking_conflicts']:
-                lines.append("├─ Warnings & Issues " + "─" * (60 - len("Warnings & Issues")) + "┤")
-                
-                # Blocking conflicts (critical)
-                for conflict in self._conflicts['blocking_conflicts']:
-                    wrapped_lines = self._wrap_text(f"🚫 {conflict}", 56)
-                    for line in wrapped_lines:
-                        lines.append(f"│ {line:<58} │")
-                
-                # Quality warnings
-                for warning in self._conflicts['quality_warnings']:
-                    wrapped_lines = self._wrap_text(f"⚠️  {warning}", 56)
-                    for line in wrapped_lines:
-                        lines.append(f"│ {line:<58} │")
-                
-                # Efficiency warnings
-                for warning in self._conflicts['efficiency_warnings']:
-                    wrapped_lines = self._wrap_text(f"💡 {warning}", 56)
-                    for line in wrapped_lines:
-                        lines.append(f"│ {line:<58} │")
-        
-        # Status section - FINAL
-        lines.append("├─ Status " + "─" * (60 - len("Status")) + "┤")
-        if self._can_be_imported:
-            lines.append("│ 🟢 Ready for import" + " " * (60 - len("Ready for import") - 5) + "│")
+def _create_formatted_output(self) -> str:
+    """Create beautifully formatted terminal output - METADATA FIRST, IMPORT LAST"""
+    lines = []
+    
+    # Feste Box-Breite definieren
+    BOX_WIDTH = 62  # Gesamtbreite der Box
+    CONTENT_WIDTH = BOX_WIDTH - 4  # Abzüglich "│ " und " │"
+    
+    def format_line(content: str) -> str:
+        """Format a line to exact box width"""
+        if len(content) <= CONTENT_WIDTH:
+            padding = CONTENT_WIDTH - len(content)
+            return f"│ {content}{' ' * padding} │"
         else:
-            lines.append("│ 🔴 Import blocked - resolve conflicts above" + " " * (60 - len("Import blocked - resolve conflicts above") - 5) + "│")
+            # Truncate if too long
+            truncated = content[:CONTENT_WIDTH-3] + "..."
+            return f"│ {truncated} │"
+    
+    def format_header(title: str) -> str:
+        """Format a section header"""
+        padding_needed = CONTENT_WIDTH - len(title) - 2  # -2 for "─ " prefix
+        if padding_needed < 0:
+            title = title[:CONTENT_WIDTH-5] + "..."
+            padding_needed = 0
+        return f"├─ {title} {'─' * padding_needed}┤"
+    
+    # Header with basic file info
+    lines.append("╭" + "─" * (BOX_WIDTH - 2) + "╮")
+    lines.append(format_line(f"Audio File Analysis"))
+    lines.append(format_line(f"File: {self._base_parameter.file.name}"))
+    
+    file_size_mb = self._base_parameter.file_size_bytes / 1024 / 1024
+    lines.append(format_line(f"Size: {file_size_mb:.1f} MB, Container: {self._base_parameter.container_format_name}"))
+    lines.append(format_line(f"SHA256: {self._base_parameter.file_sh256[:20]}..."))
+    
+    # ================================================
+    # CONTAINER METADATA SECTION
+    # ================================================
+    lines.append(format_header("Container Metadata"))
+    
+    container = self._container
+    if container.get('format_long_name'):
+        format_long = container['format_long_name']
+        if len(format_long) > CONTENT_WIDTH - 8:  # "Format: " = 8 chars
+            format_long = format_long[:CONTENT_WIDTH-11] + "..."
+        lines.append(format_line(f"Format: {format_long}"))
+    
+    if container.get('duration'):
+        duration = container['duration']
+        duration_str = f"{int(duration//3600):02d}:{int((duration%3600)//60):02d}:{int(duration%60):02d}.{int((duration%1)*100):02d}"
+        lines.append(format_line(f"Duration: {duration_str}"))
+    
+    if container.get('bit_rate'):
+        total_bitrate = container['bit_rate'] // 1000
+        lines.append(format_line(f"Total Bitrate: {total_bitrate} kbps"))
+    
+    if container.get('nb_streams'):
+        lines.append(format_line(f"Streams: {container['nb_streams']} total"))
+    
+    # API access hint
+    lines.append(format_line("📝 <your_instance>.container['format_name']"))
+    
+    # ================================================
+    # AUDIO STREAMS DETAIL SECTION
+    # ================================================
+    lines.append(format_header("Audio Streams Detail"))
+    
+    for i, stream in enumerate(self._audio_streams):
+        stream_marker = "→" if stream['index'] in self._base_parameter.selected_audio_streams else " "
+        codec_name = stream['codec_name'] or 'unknown'
+        lines.append(format_line(f"{stream_marker}Stream #{stream['index']}: {codec_name}"))
         
-        # Legend for icons - FINAL
-        lines.append("│" + " " * 58 + "│")
-        legend_text = "Legend: ✅=User set, 🔧=Auto-suggested, 📝=API access"
-        if self._quality_analysis.get('is_ultrasound', False):
-            legend_text += ", 🦇=Ultrasound"
+        # Basic stream info
+        channels = stream.get('channels', 0)
+        sample_rate = stream.get('sample_rate', 0)
+        channel_text = f"{channels} channels" if channels != 2 else "stereo"
+        if channels == 1:
+            channel_text = "mono"
         
-        # Split legend if too long
-        if len(legend_text) > 56:
-            legend_lines = self._wrap_text(legend_text, 56)
-            for legend_line in legend_lines:
-                lines.append(f"│ {legend_line}" + " " * (60 - len(legend_line) - 1) + "│")
-        else:
-            lines.append(f"│ {legend_text}" + " " * (60 - len(legend_text) - 1) + "│")
+        # Ultraschall-Kennzeichnung für Streams
+        ultrasound_marker = " 🦇" if sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD else ""
+        lines.append(format_line(f"  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}"))
         
-        lines.append("╰" + "─" * 58 + "╯")
+        # Channel layout
+        if stream.get('channel_layout') and stream['channel_layout'] not in ['stereo', 'mono']:
+            layout = stream['channel_layout']
+            if len(layout) > CONTENT_WIDTH - 10:  # "Layout: " = 8 chars + some margin
+                layout = layout[:CONTENT_WIDTH-13] + "..."
+            lines.append(format_line(f"  Layout: {layout}"))
         
-        return "\n".join(lines)
+        # Sample format and bits per sample
+        if stream.get('sample_fmt') or stream.get('bits_per_sample'):
+            sample_info = f"{stream.get('sample_fmt', 'unknown')}"
+            if stream.get('bits_per_sample'):
+                sample_info += f", {stream['bits_per_sample']} bits"
+            lines.append(format_line(f"  Sample: {sample_info}"))
+        
+        # Stream-specific bitrate
+        if stream.get('bit_rate'):
+            stream_bitrate = stream['bit_rate'] // 1000
+            lines.append(format_line(f"  Bitrate: {stream_bitrate} kbps"))
+        
+        # Disposition flags (if any interesting ones)
+        if stream.get('disposition'):
+            disp_flags = []
+            for key, value in stream['disposition'].items():
+                if value and key in ['default', 'forced', 'comment', 'lyrics', 'karaoke']:
+                    disp_flags.append(key)
+            if disp_flags:
+                flags_str = ', '.join(disp_flags)
+                if len(flags_str) > CONTENT_WIDTH - 9:  # "Flags: " = 7 chars + margin
+                    flags_str = flags_str[:CONTENT_WIDTH-12] + "..."
+                lines.append(format_line(f"  Flags: {flags_str}"))
+        
+        if i < len(self._audio_streams) - 1:  # Add separator between streams
+            lines.append("│" + "─" * (BOX_WIDTH - 2) + "│")
+    
+    # API access hint for audio streams
+    lines.append(format_line("📝 <your_instance>.audio_streams[0]['codec_name']"))
+    
+    # ================================================
+    # OTHER STREAMS SECTION (if any)
+    # ================================================
+    if self._other_streams:
+        lines.append(format_header("Other Streams"))
+        
+        for stream in self._other_streams:
+            codec_type = stream.get('codec_type', 'unknown')
+            codec_name = stream.get('codec_name', 'unknown')
+            stream_info = f"Stream #{stream['index']}: {codec_type} ({codec_name})"
+            lines.append(format_line(stream_info))
+        
+        # API access hint
+        lines.append(format_line("📝 <your_instance>.other_streams[0]['codec_type']"))
+    
+    # ================================================
+    # METADATA TAGS SECTION (if available)
+    # ================================================
+    format_tags = self._general_meta.get('format', {}).get('tags', {})
+    if format_tags:
+        lines.append(format_header("Metadata Tags"))
+        
+        # Show most important tags
+        important_tags = ['title', 'artist', 'album', 'date', 'genre', 'comment']
+        shown_tags = 0
+        for tag in important_tags:
+            if tag in format_tags and shown_tags < 4:  # Limit to 4 tags to save space
+                value = str(format_tags[tag])
+                # Calculate available space for value
+                tag_label = f"{tag.capitalize()}: "
+                available_space = CONTENT_WIDTH - len(tag_label)
+                if len(value) > available_space:
+                    value = value[:available_space-3] + "..."
+                lines.append(format_line(f"{tag_label}{value}"))
+                shown_tags += 1
+        
+        # Show total count if more tags exist
+        total_tags = len(format_tags)
+        if total_tags > shown_tags:
+            lines.append(format_line(f"... and {total_tags - shown_tags} more tags"))
+        
+        # API access hint
+        lines.append(format_line("📝 <your_instance>.general_meta['format']['tags']"))
+    
+    # ================================================
+    # IMPORT SETTINGS - AM ENDE! (Most important for user)
+    # ================================================
+    lines.append(format_header("Recommended Import Settings"))
+    
+    # Primary audio stream info for import
+    if self._base_parameter.stream_parameters:
+        primary_stream = self._base_parameter.stream_parameters[0]
+        codec_name = primary_stream.codec_name or "unknown"
+        compression_type = self._quality_analysis.get('compression_type', AudioCompressionBaseType.UNKNOWN)
+        
+        # Format compression type display
+        compression_display = {
+            AudioCompressionBaseType.UNCOMPRESSED: "uncompressed",
+            AudioCompressionBaseType.LOSSLESS_COMPRESSED: "lossless",
+            AudioCompressionBaseType.LOSSY_COMPRESSED: "lossy",
+            AudioCompressionBaseType.UNKNOWN: "unknown"
+        }.get(compression_type, "unknown")
+        
+        lines.append(format_line(f"Source: {codec_name} ({compression_display})"))
+    
+    # Show current/suggested parameters
+    if self._target_format:
+        status_icon = "✅" if 'target_format' in self._user_defined_params else "🔧"
+        format_name = self._target_format.name
+        lines.append(format_line(f"{status_icon} Target: {format_name}"))
+    
+    if self._target_sampling_transform:
+        status_icon = "✅" if 'target_sampling_transform' in self._user_defined_params else "🔧"
+        transform_name = self._target_sampling_transform.name
+        lines.append(format_line(f"{status_icon} Sampling: {transform_name}"))
+    
+    # Codec-specific parameters
+    if self._target_format and self._target_format.code == 'aac' and self._aac_bitrate:
+        status_icon = "✅" if 'aac_bitrate' in self._user_defined_params else "🔧"
+        bitrate_str = f"AAC {self._aac_bitrate//1000} kbps"
+        lines.append(format_line(f"{status_icon} Bitrate: {bitrate_str}"))
+    
+    if self._target_format and self._target_format.code == 'flac':
+        status_icon = "✅" if 'flac_compression_level' in self._user_defined_params else "🔧"
+        compression_str = f"FLAC level {self._flac_compression_level}"
+        lines.append(format_line(f"{status_icon} Compression: {compression_str}"))
+    
+    # Show reasoning if suggestions were applied
+    suggestions = QualityAnalyzer.suggest_target_parameters(self._quality_analysis)
+    if 'reason' in suggestions and not all(param in self._user_defined_params for param in ['target_format', 'aac_bitrate', 'flac_compression_level']):
+        # Rationale box - nested box design
+        lines.append(format_line("┌─ Rationale " + "─" * (CONTENT_WIDTH - 13) + "┐"))
+        reason = suggestions['reason']
+        # Word wrap the reason text
+        reason_lines = self._wrap_text(reason, CONTENT_WIDTH - 6)  # -6 for "│ │ " and " │ │"
+        for reason_line in reason_lines:
+            lines.append(format_line(f"│ {reason_line.ljust(CONTENT_WIDTH - 6)} │"))
+        lines.append(format_line("└" + "─" * (CONTENT_WIDTH - 2) + "┘"))
+    
+    # API access hints for import parameters
+    lines.append(format_line("📝 <your_instance>.target_format"))
+    lines.append(format_line("📝 <your_instance>.get_import_parameters()"))
+    
+    # Warnings and conflicts section
+    if self._conflicts:
+        if self._conflicts['quality_warnings'] or self._conflicts['efficiency_warnings'] or self._conflicts['blocking_conflicts']:
+            lines.append(format_header("Warnings & Issues"))
+            
+            # Blocking conflicts (critical)
+            for conflict in self._conflicts['blocking_conflicts']:
+                conflict_text = f"🚫 {conflict}"
+                wrapped_lines = self._wrap_text(conflict_text, CONTENT_WIDTH)
+                for line in wrapped_lines:
+                    lines.append(format_line(line))
+            
+            # Quality warnings
+            for warning in self._conflicts['quality_warnings']:
+                warning_text = f"⚠️  {warning}"
+                wrapped_lines = self._wrap_text(warning_text, CONTENT_WIDTH)
+                for line in wrapped_lines:
+                    lines.append(format_line(line))
+            
+            # Efficiency warnings
+            for warning in self._conflicts['efficiency_warnings']:
+                warning_text = f"💡 {warning}"
+                wrapped_lines = self._wrap_text(warning_text, CONTENT_WIDTH)
+                for line in wrapped_lines:
+                    lines.append(format_line(line))
+    
+    # Status section - FINAL
+    lines.append(format_header("Status"))
+    if self._can_be_imported:
+        lines.append(format_line("🟢 Ready for import"))
+    else:
+        lines.append(format_line("🔴 Import blocked - resolve conflicts above"))
+    
+    # Legend for icons - FINAL
+    lines.append(format_line(""))  # Empty line
+    legend_text = "Legend: ✅=User set, 🔧=Auto-suggested, 📝=API access"
+    if self._quality_analysis.get('is_ultrasound', False):
+        legend_text += ", 🦇=Ultrasound"
+    
+    # Split legend if too long
+    if len(legend_text) <= CONTENT_WIDTH:
+        lines.append(format_line(legend_text))
+    else:
+        legend_lines = self._wrap_text(legend_text, CONTENT_WIDTH)
+        for legend_line in legend_lines:
+            lines.append(format_line(legend_line))
+    
+    lines.append("╰" + "─" * (BOX_WIDTH - 2) + "╯")
+    
+    return "\n".join(lines)
     
     def _wrap_text(self, text: str, width: int) -> List[str]:
         """Wrap text to specified width, preserving words"""
