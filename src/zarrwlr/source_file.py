@@ -377,7 +377,7 @@ class QualityAnalyzer:
 #
 class ConflictAnalyzer:
     """Detects configuration conflicts and quality issues"""
-    
+
     @staticmethod
     def analyze_conflicts(source_analysis: dict, target_params: dict) -> dict:
         """
@@ -654,7 +654,7 @@ class FileParameter:
         logger.trace("Enhanced FileParameter initialization complete")
     
     # ================================================
-    # TARGET PARAMETER PROPERTIES (NEW)
+    # TARGET PARAMETER PROPERTIES
     # ================================================
     
     @property
@@ -771,9 +771,9 @@ class FileParameter:
         
         # Check stream compatibility
         if len(selected_indices) > 1:
-            ref_stream = self._base_parameter.stream_parameters[selected_indices[0]]
+            ref_stream:AudioStreamParameters = self._base_parameter.stream_parameters[selected_indices[0]]
             for i in selected_indices[1:]:
-                stream = self._base_parameter.stream_parameters[i]
+                stream:AudioStreamParameters = self._base_parameter.stream_parameters[i]
                 if stream.nb_samples != ref_stream.nb_samples:
                     self._can_be_imported = False
                     logger.error("Different sample counts between streams")
@@ -794,7 +794,7 @@ class FileParameter:
         if not self._can_be_imported:
             return False
         
-        # NEW: Perform quality analysis
+        # Perform quality analysis
         if selected_indices:
             primary_stream = self._base_parameter.stream_parameters[selected_indices[0]]
             self._quality_analysis = QualityAnalyzer.analyze_source_quality(
@@ -862,18 +862,143 @@ class FileParameter:
         return self._create_formatted_output()
     
     def _create_formatted_output(self) -> str:
-        """Create beautifully formatted terminal output"""
+        """Create beautifully formatted terminal output - METADATA FIRST, IMPORT LAST"""
         lines = []
         
-        # Header with file info
+        # Header with basic file info
         lines.append("╭─ Audio File Analysis " + "─" * (60 - len("Audio File Analysis")) + "╮")
         lines.append(f"│ File: {self._base_parameter.file.name:<45} │")
         
         file_size_mb = self._base_parameter.file_size_bytes / 1024 / 1024
         lines.append(f"│ Size: {file_size_mb:.1f} MB, Container: {self._base_parameter.container_format_name:<25} │")
-        lines.append("├─ Audio Stream " + "─" * (60 - len("Audio Stream")) + "┤")
+        lines.append(f"│ SHA256: {self._base_parameter.file_sh256[:20]}..." + " " * (60 - len(f"SHA256: {self._base_parameter.file_sh256[:20]}...") - 1) + "│")
         
-        # Primary audio stream info
+        # ================================================
+        # CONTAINER METADATA SECTION
+        # ================================================
+        lines.append("├─ Container Metadata " + "─" * (60 - len("Container Metadata")) + "┤")
+        
+        container = self._container
+        if container.get('format_long_name'):
+            format_long = container['format_long_name'][:40] + "..." if len(container['format_long_name']) > 40 else container['format_long_name']
+            lines.append(f"│ Format: {format_long:<47} │")
+        
+        if container.get('duration'):
+            duration = container['duration']
+            duration_str = f"{int(duration//3600):02d}:{int((duration%3600)//60):02d}:{int(duration%60):02d}.{int((duration%1)*100):02d}"
+            lines.append(f"│ Duration: {duration_str:<45} │")
+        
+        if container.get('bit_rate'):
+            total_bitrate = container['bit_rate'] // 1000
+            lines.append(f"│ Total Bitrate: {total_bitrate} kbps" + " " * (60 - len(f"Total Bitrate: {total_bitrate} kbps") - 1) + "│")
+        
+        if container.get('nb_streams'):
+            lines.append(f"│ Streams: {container['nb_streams']} total" + " " * (60 - len(f"Streams: {container['nb_streams']} total") - 1) + "│")
+        
+        # Template-style API access hint
+        api_hint = "📝 <your_instance>.container['format_name']"
+        lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
+        
+        # ================================================
+        # AUDIO STREAMS DETAIL SECTION
+        # ================================================
+        lines.append("├─ Audio Streams Detail " + "─" * (60 - len("Audio Streams Detail")) + "┤")
+        
+        for i, stream in enumerate(self._audio_streams):
+            stream_marker = "→" if stream['index'] in self._base_parameter.selected_audio_streams else " "
+            lines.append(f"│{stream_marker}Stream #{stream['index']}: {stream['codec_name'] or 'unknown'}" + " " * max(1, 60 - len(f"{stream_marker}Stream #{stream['index']}: {stream['codec_name'] or 'unknown'}") - 1) + "│")
+            
+            # Basic stream info
+            channels = stream.get('channels', 0)
+            sample_rate = stream.get('sample_rate', 0)
+            channel_text = f"{channels} channels" if channels != 2 else "stereo"
+            if channels == 1:
+                channel_text = "mono"
+            
+            # Ultraschall-Kennzeichnung für Streams
+            ultrasound_marker = " 🦇" if sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD else ""
+            lines.append(f"│  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}" + " " * max(1, 60 - len(f"  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}") - 1) + "│")
+            
+            # Channel layout
+            if stream.get('channel_layout') and stream['channel_layout'] != 'stereo' and stream['channel_layout'] != 'mono':
+                layout = stream['channel_layout'][:35] + "..." if len(stream['channel_layout']) > 35 else stream['channel_layout']
+                lines.append(f"│  Layout: {layout:<45} │")
+            
+            # Sample format and bits per sample
+            if stream.get('sample_fmt') or stream.get('bits_per_sample'):
+                sample_info = f"{stream.get('sample_fmt', 'unknown')}"
+                if stream.get('bits_per_sample'):
+                    sample_info += f", {stream['bits_per_sample']} bits"
+                lines.append(f"│  Sample: {sample_info:<45} │")
+            
+            # Stream-specific bitrate
+            if stream.get('bit_rate'):
+                stream_bitrate = stream['bit_rate'] // 1000
+                lines.append(f"│  Bitrate: {stream_bitrate} kbps" + " " * (60 - len(f"  Bitrate: {stream_bitrate} kbps") - 1) + "│")
+            
+            # Disposition flags (if any interesting ones)
+            if stream.get('disposition'):
+                disp_flags = []
+                for key, value in stream['disposition'].items():
+                    if value and key in ['default', 'forced', 'comment', 'lyrics', 'karaoke']:
+                        disp_flags.append(key)
+                if disp_flags:
+                    flags_str = ', '.join(disp_flags)[:40]
+                    lines.append(f"│  Flags: {flags_str:<47} │")
+            
+            if i < len(self._audio_streams) - 1:  # Add separator between streams
+                lines.append("│" + "─" * 58 + "│")
+        
+        # Template-style API access hint for audio streams
+        api_hint = "📝 <your_instance>.audio_streams[0]['codec_name']"
+        lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
+        
+        # ================================================
+        # OTHER STREAMS SECTION (if any)
+        # ================================================
+        if self._other_streams:
+            lines.append("├─ Other Streams " + "─" * (60 - len("Other Streams")) + "┤")
+            
+            for stream in self._other_streams:
+                codec_type = stream.get('codec_type', 'unknown')
+                codec_name = stream.get('codec_name', 'unknown')
+                lines.append(f"│ Stream #{stream['index']}: {codec_type} ({codec_name})" + " " * max(1, 60 - len(f"Stream #{stream['index']}: {codec_type} ({codec_name})") - 1) + "│")
+            
+            # Template-style API access hint
+            api_hint = "📝 <your_instance>.other_streams[0]['codec_type']"
+            lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
+        
+        # ================================================
+        # METADATA TAGS SECTION (if available)
+        # ================================================
+        format_tags = self._general_meta.get('format', {}).get('tags', {})
+        if format_tags:
+            lines.append("├─ Metadata Tags " + "─" * (60 - len("Metadata Tags")) + "┤")
+            
+            # Show most important tags
+            important_tags = ['title', 'artist', 'album', 'date', 'genre', 'comment']
+            shown_tags = 0
+            for tag in important_tags:
+                if tag in format_tags and shown_tags < 4:  # Limit to 4 tags to save space
+                    value = str(format_tags[tag])[:35] + "..." if len(str(format_tags[tag])) > 35 else str(format_tags[tag])
+                    lines.append(f"│ {tag.capitalize()}: {value:<{50-len(tag)}} │")
+                    shown_tags += 1
+            
+            # Show total count if more tags exist
+            total_tags = len(format_tags)
+            if total_tags > shown_tags:
+                lines.append(f"│ ... and {total_tags - shown_tags} more tags" + " " * (60 - len(f"... and {total_tags - shown_tags} more tags") - 1) + "│")
+            
+            # Template-style API access hint
+            api_hint = "📝 <your_instance>.general_meta['format']['tags']"
+            lines.append(f"│ {api_hint}" + " " * (60 - len(api_hint) - 1) + "│")
+        
+        # ================================================
+        # IMPORT SETTINGS - AM ENDE! (Most important for user)
+        # ================================================
+        lines.append("├─ Recommended Import Settings " + "─" * (60 - len("Recommended Import Settings")) + "┤")
+        
+        # Primary audio stream info for import
         if self._base_parameter.stream_parameters:
             primary_stream = self._base_parameter.stream_parameters[0]
             codec_name = primary_stream.codec_name or "unknown"
@@ -887,35 +1012,7 @@ class FileParameter:
                 AudioCompressionBaseType.UNKNOWN: "unknown"
             }.get(compression_type, "unknown")
             
-            lines.append(f"│ Codec: {codec_name} ({compression_display})" + " " * (60 - len(f"Codec: {codec_name} ({compression_display})") - 1) + "│")
-            
-            # Channels and sample rate
-            channels = primary_stream.nb_channels or 0
-            channel_text = f"{channels} channels" if channels != 2 else "stereo"
-            if channels == 1:
-                channel_text = "mono"
-            
-            sample_rate = primary_stream.sample_rate or 0
-            
-            # NEUE AUSGABE: Ultraschall-Kennzeichnung
-            if self._quality_analysis.get('is_ultrasound', False):
-                ultrasound_marker = " 🦇"  # Fledermaus-Symbol für Ultraschall
-            else:
-                ultrasound_marker = ""
-            
-            lines.append(f"│ Format: {channel_text}, {sample_rate:,} Hz{ultrasound_marker}" + " " * (60 - len(f"Format: {channel_text}, {sample_rate:,} Hz{ultrasound_marker}") - 1) + "│")
-            
-            # Bitrate and duration (if available)
-            if primary_stream.bit_rate:
-                bitrate_kbps = primary_stream.bit_rate // 1000
-                lines.append(f"│ Bitrate: {bitrate_kbps} kbps" + " " * (60 - len(f"Bitrate: {bitrate_kbps} kbps") - 1) + "│")
-            
-            if primary_stream.nb_samples and primary_stream.sample_rate:
-                duration_sec = primary_stream.nb_samples / primary_stream.sample_rate
-                duration_str = f"{int(duration_sec//60)}:{int(duration_sec%60):02d}.{int((duration_sec%1)*10)}"
-                lines.append(f"│ Duration: {duration_str}" + " " * (60 - len(f"Duration: {duration_str}") - 1) + "│")
-        
-        lines.append("├─ Recommended Import Settings " + "─" * (60 - len("Recommended Import Settings")) + "┤")
+            lines.append(f"│ Source: {codec_name} ({compression_display})" + " " * (60 - len(f"Source: {codec_name} ({compression_display})") - 1) + "│")
         
         # Show current/suggested parameters
         if self._target_format:
@@ -950,6 +1047,10 @@ class FileParameter:
                 lines.append(f"│ │ {reason_line:<44} │ │")
             lines.append("│ └" + "─" * 46 + "┘ │")
         
+        # API access hints for import parameters
+        lines.append(f"│ 📝 <your_instance>.target_format" + " " * (60 - len("📝 <your_instance>.target_format") - 1) + "│")
+        lines.append(f"│ 📝 <your_instance>.get_import_parameters()" + " " * (60 - len("📝 <your_instance>.get_import_parameters()") - 1) + "│")
+        
         # Warnings and conflicts section
         if self._conflicts:
             if self._conflicts['quality_warnings'] or self._conflicts['efficiency_warnings'] or self._conflicts['blocking_conflicts']:
@@ -973,19 +1074,26 @@ class FileParameter:
                     for line in wrapped_lines:
                         lines.append(f"│ {line:<58} │")
         
-        # Status section
+        # Status section - FINAL
         lines.append("├─ Status " + "─" * (60 - len("Status")) + "┤")
         if self._can_be_imported:
             lines.append("│ 🟢 Ready for import" + " " * (60 - len("Ready for import") - 5) + "│")
         else:
             lines.append("│ 🔴 Import blocked - resolve conflicts above" + " " * (60 - len("Import blocked - resolve conflicts above") - 5) + "│")
         
-        # Legend for icons
+        # Legend for icons - FINAL
         lines.append("│" + " " * 58 + "│")
-        legend_text = "Legend: ✅=User set, 🔧=Auto-suggested"
+        legend_text = "Legend: ✅=User set, 🔧=Auto-suggested, 📝=API access"
         if self._quality_analysis.get('is_ultrasound', False):
             legend_text += ", 🦇=Ultrasound"
-        lines.append(f"│ {legend_text}" + " " * (60 - len(legend_text) - 1) + "│")
+        
+        # Split legend if too long
+        if len(legend_text) > 56:
+            legend_lines = self._wrap_text(legend_text, 56)
+            for legend_line in legend_lines:
+                lines.append(f"│ {legend_line}" + " " * (60 - len(legend_line) - 1) + "│")
+        else:
+            lines.append(f"│ {legend_text}" + " " * (60 - len(legend_text) - 1) + "│")
         
         lines.append("╰" + "─" * 58 + "╯")
         
