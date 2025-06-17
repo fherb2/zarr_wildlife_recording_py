@@ -1,5 +1,609 @@
+"""
+Enhanced Audio Import Utilities with Intelligent Analysis and Quality Assessment
+===============================================================================
+
+This module provides a comprehensive system for analyzing audio files and determining optimal
+import parameters for the Zarr v3 wildlife recording database. It combines deep technical 
+analysis with intelligent quality assessment and user guidance to ensure optimal audio 
+storage decisions.
+
+The module serves as the foundation for the enhanced import API, replacing the original
+source_file.py and audio_coding.py modules with a unified, more capable system that
+understands the specific requirements of wildlife and scientific audio recording.
+
+CORE ARCHITECTURE OVERVIEW
+==========================
+
+The module is built around five main components that work together to provide intelligent
+audio import guidance:
+
+1. **Audio Stream Analysis** (`AudioStreamParameters`, `FileBaseParameters`)
+   - Deep technical analysis of audio streams using ffprobe
+   - Container format detection and metadata extraction
+   - Multi-stream support with compatibility checking
+
+2. **Target Format Definition** (`TargetFormats`, `TargetSamplingTransforming`) 
+   - Flexible codec and sample rate targeting system
+   - Support for FLAC (lossless), AAC-LC (lossy), and future NUMPY format
+   - Intelligent sample rate handling including ultrasound scenarios
+
+3. **Quality Assessment Engine** (`QualityAnalyzer`)
+   - Source quality classification (compression type, bitrate class, quality tier)
+   - Intelligent parameter suggestions based on scientific audio requirements
+   - Special handling for ultrasound recordings (>96kHz) and copy-mode scenarios
+
+4. **Conflict Detection System** (`ConflictAnalyzer`)
+   - Multi-level conflict analysis: blocking/quality/efficiency warnings
+   - Wildlife-specific checks (AAC multichannel issues, copy-mode validation)
+   - Sample rate compatibility and quality degradation detection
+
+5. **User Interface & Guidance** (`FileParameter`)
+   - Comprehensive file analysis with auto-suggestions
+   - Beautiful terminal output with quality assessment and warnings
+   - User parameter tracking to prevent override of explicit choices
+
+COMPLETE MODULE CONTENTS OVERVIEW
+================================
+
+### Core Data Classes
+--------------------
+**AudioStreamParameters:** Dataclass for storing technical parameters of individual audio streams 
+extracted via ffprobe. Contains stream index, channel count, sample rate, format, codec name, 
+sample count, and bitrate information.
+
+**FileBaseParameters:** Comprehensive dataclass aggregating file-level audio information including 
+file path, size, hash, container format, stream parameters list, selected streams, and total 
+channel counts. Serves as the foundational data structure for import decisions.
+
+### Format and Transform Enums
+-----------------------------
+**TargetFormats:** Enum defining all supported target storage formats (FLAC, AAC, NUMPY) with 
+specific sample rate variants and flexible string parsing. Includes codec identification and 
+sample rate constraints for each format option.
+
+**TargetSamplingTransforming:** Enum specifying sample rate conversion methods including exact 
+preservation (EXACTLY), interpolative resampling (RESAMPLING_*), and ultrasound-specific 
+reinterpretation (REINTERPRETING_*). Each method has specific use cases and quality implications.
+
+**AudioCompressionBaseType:** Classification enum for audio compression types distinguishing 
+between uncompressed (PCM), lossless compressed (FLAC, ALAC), lossy compressed (AAC, MP3), 
+and unknown formats. Forms the basis for quality-aware conversion decisions.
+
+### Analysis and Intelligence Classes
+------------------------------------
+**QualityAnalyzer:** Static class implementing sophisticated audio quality analysis algorithms 
+specifically optimized for wildlife and scientific recording scenarios. Provides source quality 
+classification, intelligent parameter suggestions, and special handling for ultrasound recordings.
+
+**ConflictAnalyzer:** Static class for detecting configuration conflicts and quality issues in 
+three severity levels (blocking, quality warnings, efficiency warnings). Includes wildlife-specific 
+protections against multichannel data loss and ultrasound signal destruction.
+
+**FileParameter:** Primary user interface class orchestrating complete file analysis, parameter 
+suggestion, conflict detection, and user guidance. Features intelligent auto-suggestion system 
+with user override tracking and beautiful terminal output formatting.
+
+### Utility Functions
+--------------------
+**get_audio_codec_compression_type(codec_name: str):** Comprehensive codec classification function 
+supporting hundreds of audio codecs recognized by ffmpeg. Maps codec names to compression types 
+with special handling for variants and edge cases.
+
+**can_use_copy_mode(source_codec: str, target_format):** Utility function determining if 1:1 
+copy transfer is possible between source and target formats. Enables detection of bit-perfect 
+preservation opportunities without re-encoding.
+
+**get_copy_mode_benefits(source_codec: str, target_format):** Returns detailed information about 
+copy-mode advantages for a given codec combination. Provides quality, speed, and preservation 
+benefits for user decision support.
+
+**should_warn_about_re_encoding(source_codec: str, target_format, target_bitrate):** Analyzes 
+whether users should be warned about unnecessary re-encoding when copy-mode alternatives exist. 
+Helps prevent quality loss from avoidable generation loss scenarios.
+
+**can_ffmpeg_decode_codec(codec_name: str):** Validation function checking if the installed 
+ffmpeg version can decode a specific codec. Uses ffmpeg's decoder list to verify compatibility 
+before attempting import operations.
+
+### Backward Compatibility
+-------------------------
+**audio_codec_compression:** Alias for get_audio_codec_compression_type() maintaining compatibility 
+with existing code that references the original function name from the deprecated audio_coding.py module.
+
+DETAILED COMPONENT DESCRIPTIONS
+===============================
+
+### AudioStreamParameters & FileBaseParameters
+----------------------------------------------
+Foundation classes for storing technical audio stream information extracted via ffprobe.
+AudioStreamParameters captures per-stream data (codec, sample rate, channels, bitrate),
+while FileBaseParameters aggregates file-level information including selected streams
+and total channel counts. These form the analytical basis for all quality decisions.
+
+### TargetFormats Enum
+----------------------
+Defines all supported target formats with flexible string conversion support:
+
+**FLAC Variants:**
+- `FLAC`: Auto sample rate selection (1Hz - 655.35kHz range)
+- `FLAC_44100`, `FLAC_48000`, `FLAC_96000`, etc.: Fixed sample rates
+- Supports lossless compression levels 0-12
+
+**AAC-LC Variants:**
+- `AAC`: Auto sample rate selection for optimal compatibility
+- `AAC_44100`, `AAC_48000`, etc.: Fixed sample rates optimized for AAC
+- Bitrate range: 32kbps - 320kbps with intelligent defaults
+
+**NUMPY Format:** (Future implementation)
+- Preserves original sample rates without codec limitations
+- Lossless storage using numpy array compression
+
+The enum supports flexible string input: "flac", "FLAC_44100", "aac48000" are all valid.
+
+### TargetSamplingTransforming Enum  
+------------------------------------
+Handles sample rate conversion with three distinct approaches:
+
+**EXACTLY:** Direct preservation of source sample rate
+- Used when source and target rates match perfectly
+- Optimal for quality preservation, zero processing overhead
+
+**RESAMPLING:** Traditional interpolative sample rate conversion
+- High-quality algorithm for standard audio processing
+- Variants: RESAMPLING_44100, RESAMPLING_48000, etc.
+- RESAMPLING_NEAREST: Auto-selects closest standard rate
+
+**REINTERPRETING:** Special technique for ultrasound audio
+- Does NOT resample - reinterprets sample timestamps
+- Critical for bat recordings and other ultrasound applications
+- Preserves original signal characteristics in frequency domain
+- Variants: REINTERPRETING_32000, REINTERPRETING_AUTO
+
+### QualityAnalyzer - The Intelligence Core
+-------------------------------------------
+Implements sophisticated quality analysis and suggestion algorithms optimized for
+wildlife and scientific audio recording scenarios.
+
+**Source Quality Classification:**
+```
+Compression Analysis:
+├── AudioCompressionBaseType.UNCOMPRESSED (PCM variants)
+├── AudioCompressionBaseType.LOSSLESS_COMPRESSED (FLAC, ALAC, etc.)
+├── AudioCompressionBaseType.LOSSY_COMPRESSED (AAC, MP3, Opus, etc.)
+└── AudioCompressionBaseType.UNKNOWN (unrecognized codecs)
+
+Quality Tiers:
+├── 'low': Poor bitrate lossy sources  
+├── 'standard': Good lossy or standard lossless
+├── 'high': High-quality lossless (≥48kHz)
+├── 'studio': Professional lossless (≥96kHz)
+└── 'ultrasound': Bat/scientific recordings (>96kHz)
+```
+
+**Intelligent Suggestion Strategies:**
+
+**Strategy A: AAC→AAC Copy-Mode (Highest Priority)**
+- Detects when source is already AAC and target is AAC
+- Suggests 1:1 transfer without re-encoding to prevent generation loss
+- Preserves exact bitrate and quality characteristics
+- Rationale: "AAC→AAC Copy-Mode: 1:1 transfer without re-encoding"
+
+**Strategy B: Lossy→AAC Upgrade with Intelligent Bitrate**
+- For lossy sources (MP3, old AAC, etc.) targeting AAC
+- Calculates optimal upgrade bitrate using adaptive factors:
+  ```
+  Source <96kbps:   +40% (significant boost for very low quality)
+  Source 96-128kbps: +35% (substantial improvement) 
+  Source 128-160kbps: +30% (noticeable upgrade)
+  Source 160-192kbps: +25% (moderate enhancement)
+  Source 192-256kbps: +18% (conservative improvement)
+  Source >256kbps:   +15% (minimal, near-transparent range)
+  ```
+- Applies minimum standards: 160kbps mono, 190kbps stereo, 220kbps multichannel
+- Never exceeds AAC-LC maximum of 320kbps
+
+**Strategy C: Lossless→FLAC Preference**
+- For lossless sources, strongly prefers FLAC preservation
+- Matches source sample rate exactly when possible
+- Special handling for ultra-high sample rates (>655kHz FLAC limit)
+
+**Ultrasound Recording Specialist:**
+- Detects recordings >96kHz as potential bat/ultrasound content
+- For lossless sources: Preserves in FLAC if within 655kHz limit
+- For lossy requests: Suggests REINTERPRETING to 32kHz (16kHz Nyquist)
+- Never suggests regular resampling for ultrasound (destroys signal)
+
+### ConflictAnalyzer - Quality Guardian
+--------------------------------------
+Implements three-tier conflict detection system to protect against quality loss
+and guide users toward optimal decisions.
+
+**Blocking Conflicts (🚫):**
+- Prevent import entirely until resolved
+- FLAC 8-channel limit exceeded
+- Sample rate incompatibilities requiring transformation
+- Critical ultrasound + resampling combinations
+
+**Quality Warnings (⚠️):**
+- Significant quality degradation scenarios
+- AAC multichannel spatial information loss
+- Lossy→Lossy re-encoding with insufficient bitrate upgrade
+- Lossless→Lossy conversion below scientific standards
+- Copy-mode available but user choosing re-encoding
+
+**Efficiency Warnings (💡):**
+- Unnecessary file size inflation
+- Low-quality lossy→FLAC conversion suggestions
+- Excessive AAC bitrates (>256kbps) where FLAC more appropriate
+- FLAC→FLAC re-compression without rate conversion
+
+**Wildlife-Specific Protections:**
+```
+AAC Multichannel Analysis:
+├── Copy-Mode (source already AAC): Mild warning about analysis limitations
+├── Re-Encoding (other→AAC): Strong warning about spatial data loss
+└── Scientific multichannel: Recommends FLAC for ≤8 channels
+
+Ultrasound Safeguards:
+├── Blocks AAC + Resampling combinations for >96kHz sources
+├── Enforces REINTERPRETING for lossy ultrasound conversion
+├── Validates FLAC sample rate limits (655kHz maximum)
+└── Protects against accidental signal destruction
+```
+
+### FileParameter - The User Interface
+-------------------------------------
+The primary user-facing class that orchestrates all analysis components and provides
+intelligent guidance through beautiful terminal output.
+
+**Auto-Suggestion System:**
+- Tracks user-modified parameters in `_user_defined_params` set
+- Only auto-suggests parameters not explicitly set by user
+- Re-analyzes automatically when parameters change
+- Prevents override of user decisions while providing guidance
+
+**Terminal Output Design:**
+```
+╭─ Audio File Analysis ───────────────────────────────╮
+│ File: bat_recording_96khz.wav (142.7 MB)            │
+│ Container: WAV                                      │
+├─ Audio Stream ──────────────────────────────────────┤
+│ Codec: PCM (uncompressed)                           │
+│ Channels: 1 (mono)                                  │
+│ Sample Rate: 384,000 Hz 🦇                          │
+│ Duration: 0:05:23                                   │
+├─ Recommended Import Settings ───────────────────────┤
+│ ✅ Target: AAC_32000 (user set)                     │
+│ 🔧 Sampling: REINTERPRETING_32000 (ultrasound)      │
+│ 🔧 Bitrate: AAC 192 kbps                            │
+│ >>> Ultrasound signal (384kHz) → Reinterpretation   │
+│     to 32kHz for AAC (16kHz Nyquist) <<<            │
+├─ Warnings & Issues ─────────────────────────────────┤
+│ 💡 Ultrasound detected: Using reinterpretation      │
+│     instead of resampling to preserve signal        │
+│     characteristics                                 │
+├─ Status ────────────────────────────────────────────┤
+│ 🟢 Ready for import                                 │
+╰─────────────────────────────────────────────────────╯
+
+Legend: ✅=User set, 🔧=Auto-suggested, 🦇=Ultrasound
+```
+
+**API Access Guidance:**
+The terminal output includes comprehensive API access hints for programmatic use:
+```python
+📝 <your_instance>.target_format
+📝 <your_instance>.aac_bitrate  # if using AAC
+📝 <your_instance>.get_import_parameters()
+📝 <your_instance>.conflicts
+📝 <your_instance>.quality_analysis
+```
+
+CONVERSION RULES AND CONSTRAINTS
+================================
+
+### Sample Rate Handling Matrix
+------------------------------
+```
+Source Rate vs Target Format Compatibility:
+
+FLAC Target:
+├── 1Hz - 655,350Hz: Direct support (EXACTLY transform)
+├── >655,350Hz: Requires resampling to ≤655kHz or reinterpretation
+└── Auto rates: Matches source when possible
+
+AAC Target:
+├── Standard rates (8kHz-96kHz): Direct support
+├── >96kHz: Requires resampling or reinterpretation
+├── Ultrasound (>96kHz): Strongly recommends REINTERPRETING_32000
+└── Auto rates: Selects optimal AAC-compatible rate
+
+Special Cases:
+├── 44.1kHz → FLAC_44100 or AAC_44100 (perfect match)
+├── 48kHz → FLAC_48000 or AAC_48000 (professional standard)
+├── 96kHz+ → Ultrasound handling (FLAC preferred, reinterpret for AAC)
+└── Non-standard → Auto-selects nearest supported rate
+```
+
+### Quality Preservation Rules
+-----------------------------
+**Lossless Sources (PCM, FLAC, ALAC):**
+1. **Primary recommendation:** FLAC with exact sample rate preservation
+2. **AAC conversion:** Only with explicit user request + quality warnings
+3. **Minimum AAC bitrates:** 160kbps mono, 190kbps stereo for scientific use
+4. **Ultrasound special case:** FLAC preferred, reinterpretation if AAC required
+
+**Lossy Sources (AAC, MP3, Opus):**
+1. **Same codec:** Copy-mode preferred (AAC→AAC, prevents generation loss)
+2. **Cross-codec:** Intelligent bitrate upgrade (+25-40% depending on quality)
+3. **Minimum upgrade threshold:** 20% bitrate increase for cross-conversion
+4. **Quality floor:** Never suggest conversion to lower bitrate than source
+
+**Unknown/Unrecognized Sources:**
+1. **Conservative approach:** High-quality AAC (192kbps stereo)
+2. **Format compatibility:** Auto-detect optimal sample rate
+3. **Safety margins:** Higher bitrates to compensate for uncertainty
+
+### Copy-Mode Detection and Benefits
+-----------------------------------
+**Copy-Mode Scenarios:**
+```
+Perfect Matches (1:1 transfer):
+├── AAC source → AAC target: Bit-perfect preservation
+├── FLAC source → FLAC target: Lossless preservation
+└── Same sample rate + compatible format = Copy-Mode eligible
+
+Copy-Mode Benefits:
+├── Zero generation loss (no re-encoding)
+├── Faster processing (no codec overhead)
+├── Perfect quality preservation
+├── Metadata preservation
+└── Bit-identical data transfer
+```
+
+**Copy-Mode Warnings:**
+- User choosing re-encoding when copy-mode available
+- AAC→AAC with different bitrate target (quality loss despite "upgrade")
+- FLAC→FLAC with unnecessary sample rate changes
+
+### Multichannel Audio Considerations
+------------------------------------
+**FLAC Multichannel:**
+- Supports up to 8 channels natively
+- Perfect for wildlife stereo/surround recording setups
+- Preserves exact spatial information for scientific analysis
+- No channel count restrictions below 8 channels
+
+**AAC Multichannel Limitations:**
+```
+Wildlife Recording Challenges:
+├── AAC-LC designed for consumer audio (stereo/5.1)
+├── Scientific multichannel may lose spatial accuracy
+├── Downmix matrix not optimized for directional analysis
+└── Recommendation: Use FLAC for >2 channel scientific recordings
+
+Copy-Mode vs Re-Encoding:
+├── Copy-Mode (source already AAC): Analysis limitations noted
+├── Re-Encoding (other→AAC): Strong warnings about data loss
+└── 4+ channels: Explicit user confirmation recommended
+```
+
+### Ultrasound and High Sample Rate Handling
+-------------------------------------------
+**Detection Threshold:** 96kHz+ automatically flagged as potential ultrasound
+
+**Processing Strategies:**
+```
+Lossless Ultrasound Sources:
+├── ≤655kHz: FLAC with exact preservation (EXACTLY transform)
+├── >655kHz: FLAC limit exceeded, requires special handling
+│   ├── Option A: Resample to 192kHz maximum
+│   └── Option B: Reinterpret to lower rate for AAC
+└── Recommendation: Always preserve in FLAC when possible
+
+Lossy Ultrasound Requests:
+├── Target: AAC with REINTERPRETING transformation
+├── Recommended rate: 32kHz reinterpretation (16kHz Nyquist)
+├── Higher bitrates: 192kbps+ for reinterpretation accuracy
+└── NEVER use resampling (destroys ultrasonic characteristics)
+
+Bat Recording Example:
+Source: 384kHz WAV → Target: AAC
+├── Detection: Ultrasound flagged 🦇
+├── Transform: REINTERPRETING_32000 
+├── Bitrate: 192kbps (higher for reinterpretation quality)
+├── Result: 12x time expansion, frequency preservation
+└── Playback: Original timing restored via metadata
+```
+
+### User Parameter Override System
+---------------------------------
+**Intelligent Suggestion Engine:**
+The FileParameter class implements a sophisticated parameter tracking system
+that respects user choices while providing intelligent defaults.
+
+**User-Defined Parameter Tracking:**
+```python
+# Internal tracking set
+_user_defined_params: Set[str] = set()
+
+# Parameter modification examples
+file_param.target_format = "AAC_44100"          # Adds 'target_format' to user set
+file_param.aac_bitrate = 192000                 # Adds 'aac_bitrate' to user set
+file_param.reset_suggestions()                  # Clears user set, allows re-suggestion
+
+# Auto-suggestion behavior
+if 'target_format' not in self._user_defined_params:
+    self._target_format = suggested_format      # Applied automatically
+else:
+    # User choice preserved, no override
+```
+
+**Re-Analysis Triggers:**
+Every parameter change triggers immediate re-analysis to update:
+- Quality assessments based on new parameter combinations
+- Conflict detection with updated target settings
+- Copy-mode evaluation with current parameters
+- Updated suggestions for non-user-defined parameters
+
+### Error Handling and Validation
+--------------------------------
+**Input Validation:**
+```python
+# Target format validation
+TargetFormats.from_string_or_enum("flac44100")    # ✅ Flexible parsing
+TargetFormats.from_string_or_enum("invalid")      # ❌ ValueError with suggestions
+
+# Bitrate validation  
+file_param.aac_bitrate = 160000                    # ✅ Valid range
+file_param.aac_bitrate = 500000                    # ❌ ValueError: exceeds 320kbps
+
+# Sample rate compatibility
+FLAC + 800000Hz source                             # ⚠️ Warning: exceeds FLAC limit
+AAC + RESAMPLING + ultrasound                      # 🚫 Blocking: destroys signal
+```
+
+**Graceful Degradation:**
+- ffprobe failures: Conservative defaults with user notification
+- Unrecognized codecs: UNKNOWN classification, safe suggestions
+- Missing metadata: Estimated values with uncertainty flags
+- Corrupt files: Clear error messages, no import permission
+
+### Integration with Import Pipeline
+-----------------------------------
+**API Compatibility:**
+The FileParameter class is designed to integrate seamlessly with the existing
+import infrastructure while providing enhanced capabilities.
+
+**Integration Points:**
+```python
+# Analysis phase
+file_param = FileParameter("audio.wav")
+print(file_param)  # User reviews suggestions
+
+# Parameter adjustment phase (optional)
+file_param.target_format = "FLAC_96000"
+file_param.aac_bitrate = 256000
+
+# Import parameter extraction
+import_params = file_param.get_import_parameters()
+# Returns: {
+#     'target_format': TargetFormats.FLAC_96000,
+#     'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
+#     'aac_bitrate': None,  # Not applicable for FLAC
+#     'flac_compression_level': 4,
+#     'selected_streams': [0],
+#     'file_path': Path('audio.wav'),
+#     'user_meta': {},
+#     'copy_mode': False
+# }
+
+# Legacy compatibility
+zarr_group = init_original_audio_group(store_path)
+result = import_original_audio_file(
+    audio_file=import_params['file_path'],
+    zarr_original_audio_group=zarr_group,
+    target_codec=import_params['target_format'].code,
+    **import_params
+)
+```
+
+**Configuration Integration:**
+Uses system configuration for defaults while allowing per-file overrides:
+```python
+# Default values from Config
+default_aac_bitrate = 160000      # Config.aac_default_bitrate
+default_flac_level = 4            # Config.flac_compression_level
+enable_parallel = True            # Config.aac_enable_parallel_analysis
+
+# Per-file overrides via FileParameter
+file_param.aac_bitrate = 256000   # Overrides default for this file
+```
+
+USAGE EXAMPLES
+==============
+
+### Basic Analysis Workflow
+---------------------------
+```python
+from zarrwlr.import_utils import FileParameter
+
+# Automatic analysis with suggestions
+file_param = FileParameter("wildlife_recording.flac")
+print(file_param)  # Beautiful terminal output with suggestions
+
+# Check if ready for import
+if file_param.can_be_imported:
+    params = file_param.get_import_parameters()
+    # Proceed with import using suggested parameters
+else:
+    print("Resolve conflicts:")
+    for conflict in file_param.conflicts['blocking_conflicts']:
+        print(f"🚫 {conflict}")
+```
+
+### Advanced Parameter Control
+-----------------------------
+```python
+# Start with analysis
+file_param = FileParameter("bat_384khz.wav")
+
+# Override suggestions for specific requirements
+file_param.target_format = "AAC_32000"                    # Force AAC for smaller files
+file_param.target_sampling_transform = "REINTERPRETING_32000"  # Correct for ultrasound
+file_param.aac_bitrate = 256000                           # Higher quality for scientific use
+
+# Verify no conflicts introduced
+if file_param.has_blocking_conflicts:
+    print("Configuration conflicts detected!")
+    for conflict in file_param.conflicts['blocking_conflicts']:
+        print(f"🚫 {conflict}")
+else:
+    print("✅ Configuration validated, ready for import")
+```
+
+### Batch Processing with Quality Control
+----------------------------------------
+```python
+import pathlib
+from zarrwlr.import_utils import FileParameter, QualityAnalyzer
+
+audio_files = pathlib.Path("recordings").glob("*.wav")
+analysis_results = []
+
+for audio_file in audio_files:
+    file_param = FileParameter(audio_file)
+    
+    # Quality classification
+    quality_tier = file_param.quality_analysis.get('quality_tier', 'unknown')
+    is_ultrasound = file_param.is_ultrasound_recording
+    copy_mode = file_param.is_copy_mode
+    
+    analysis_results.append({
+        'file': audio_file.name,
+        'quality_tier': quality_tier,
+        'ultrasound': is_ultrasound,
+        'copy_mode_available': copy_mode,
+        'can_import': file_param.can_be_imported,
+        'suggested_format': file_param.target_format.name if file_param.target_format else None
+    })
+
+# Summary report
+ultrasound_count = sum(1 for r in analysis_results if r['ultrasound'])
+copy_mode_count = sum(1 for r in analysis_results if r['copy_mode_available'])
+print(f"Analyzed {len(analysis_results)} files:")
+print(f"  🦇 Ultrasound recordings: {ultrasound_count}")
+print(f"  🔧 Copy-mode eligible: {copy_mode_count}")
+```
+
+This module represents a significant advancement in audio import intelligence,
+specifically designed for the challenges of wildlife and scientific audio recording
+while maintaining broad compatibility with general audio processing needs.
+"""
+
 from dataclasses import dataclass
 import subprocess
+import re
 import json
 import pathlib
 import hashlib
@@ -341,41 +945,41 @@ class AudioCompressionBaseType(Enum):
 # Method get_audio_codec_compression_type()
 # ==========================================
 #
-# Recognises AudioCompressionBaseType from audio codec_name
+# Recognizes AudioCompressionBaseType from audio codec_name
 #
 def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseType:
     """
-    Erkennt den Kompressionstyp anhand des Codec-Namens.
-    Unterstützt alle gängigen Audio-Codecs, die ffmpeg dekodieren kann.
+    Recognizes compression type based on codec name.
+    Supports all common audio codecs that ffmpeg can decode.
     
     Args:
-        codec_name: Name des Audio-Codecs
+        codec_name: Name of the audio codec
         
     Returns:
-        AudioCompressionBaseType: Kompressionstyp (UNCOMPRESSED, LOSSLESS_COMPRESSED, LOSSY_COMPRESSED, UNKNOWN)
+        AudioCompressionBaseType: Compression type (UNCOMPRESSED, LOSSLESS_COMPRESSED, LOSSY_COMPRESSED, UNKNOWN)
     """
-    # Normalisierung des Codec-Namens (lowercase, Bindestriche entfernen)
+    # Normalize codec name (lowercase, remove hyphens)
     normalized_name = codec_name.lower().replace("-", "_")
     
-    # UNCOMPRESSED - PCM und verwandte unkomprimierte Formate
+    # UNCOMPRESSED - PCM and related uncompressed formats
     if (normalized_name.startswith("pcm_") or 
         normalized_name in {"pcm", "s16le", "s16be", "s24le", "s24be", "s32le", "s32be", 
                            "f32le", "f32be", "f64le", "f64be", "u8", "s8"}):
         return AudioCompressionBaseType.UNCOMPRESSED
     
-    # LOSSLESS_COMPRESSED - Verlustfreie Kompression
+    # LOSSLESS_COMPRESSED - Lossless compression
     lossless_codecs = {
-        # Weit verbreitete verlustfreie Codecs
+        # Widely used lossless codecs
         "flac", "alac", "wavpack", "ape", "tak", "tta", "wv",
         # Monkey's Audio
         "monkeys_audio",
         # OptimFROG
         "ofr", "optimfrog",
-        # WavPack Varianten
+        # WavPack variants
         "wavpack", "wvpk",
-        # ALAC Varianten
+        # ALAC variants
         "apple_lossless", "m4a_lossless",
-        # Weitere verlustfreie
+        # Additional lossless
         "mlp", "truehd", "shorten", "shn", "als",
         # Real Audio Lossless
         "ralf"
@@ -384,27 +988,27 @@ def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseTyp
     if normalized_name in lossless_codecs:
         return AudioCompressionBaseType.LOSSLESS_COMPRESSED
     
-    # LOSSY_COMPRESSED - Verlustbehaftete Kompression
+    # LOSSY_COMPRESSED - Lossy compression
     lossy_codecs = {
-        # MPEG Audio Familie
+        # MPEG Audio family
         "mp3", "mp2", "mp1", "mpa", "mpega", "mp1float", "mp2float", "mp3float",
         "mp3adu", "mp3adufloat", "mp3on4", "mp3on4float",
-        # AAC Familie
+        # AAC family
         "aac", "aac_low", "aac_main", "aac_ssr", "aac_ltp", "aac_he", "aac_he_v2",
         "libfdk_aac", "aac_fixed", "aac_at", "aac_latm",
-        # Opus und Vorbis
+        # Opus and Vorbis
         "opus", "libopus", "vorbis", "libvorbis", "ogg",
-        # AC-3 Familie
+        # AC-3 family
         "ac3", "eac3", "ac3_fixed", "eac3_core",
         # Windows Media Audio
         "wma", "wmav1", "wmav2", "wmapro", "wmavoice",
-        # Note: wmalossless ist eigentlich verlustfrei, aber ffmpeg behandelt es manchmal als lossy
+        # Note: wmalossless is actually lossless, but ffmpeg sometimes treats it as lossy
         "wmalossless",
         # Dolby Codecs
         "dts", "dca", "dtshd", "dtse",
         # AMR (Adaptive Multi-Rate)
         "amrnb", "amrwb",
-        # Weitere verlustbehaftete Codecs
+        # Additional lossy codecs
         "adpcm_ima_wav", "adpcm_ms", "adpcm_g726", "adpcm_yamaha",
         "g722", "g723_1", "g729", "g726", "g726le", "gsm", "gsm_ms",
         "qcelp", "evrc", "sipr", "cook", "atrac1", "atrac3",
@@ -412,7 +1016,7 @@ def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseTyp
         "qdm2", "imc", "mace3", "mace6",
         "adx", "xa", "sol_dpcm", "interplay_dpcm",
         "roq_dpcm", "xan_dpcm", "sdx2_dpcm",
-        # Spezialisierte/seltene Codecs
+        # Specialized/rare codecs
         "bmv_audio", "dsicinaudio", "smackaudio", "ws_snd1",
         "paf_audio", "on2avc", "binkaudio_rdft", "binkaudio_dct",
         "qdmc", "speex", "libspeex",
@@ -426,7 +1030,7 @@ def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseTyp
         "8svx_exp", "8svx_fib",
         # Musepack
         "mpc7", "mpc8",
-        # Weitere ADPCM Varianten (alle verlustbehaftet)
+        # Additional ADPCM variants (all lossy)
         "adpcm_4xm", "adpcm_adx", "adpcm_afc", "adpcm_agm", "adpcm_aica",
         "adpcm_argo", "adpcm_ct", "adpcm_dtk", "adpcm_ea", "adpcm_ea_maxis_xa",
         "adpcm_ea_r1", "adpcm_ea_r2", "adpcm_ea_r3", "adpcm_ea_xas",
@@ -437,13 +1041,13 @@ def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseTyp
         "adpcm_ima_smjpeg", "adpcm_ima_ssi", "adpcm_ima_ws",
         "adpcm_mtaf", "adpcm_psx", "adpcm_sbpro_2", "adpcm_sbpro_3", "adpcm_sbpro_4",
         "adpcm_swf", "adpcm_thp", "adpcm_thp_le", "adpcm_vima", "adpcm_xa", "adpcm_zork",
-        # DPCM Varianten
+        # DPCM variants
         "derf_dpcm", "gremlin_dpcm",
-        # Weitere Sprach-Codecs
+        # Additional speech codecs
         "acelp.kelvin", "libcodec2", "libgsm", "libgsm_ms", "ilbc", "dss_sp",
-        # ATRAC Varianten
+        # ATRAC variants
         "atrac3al", "atrac3plus", "atrac3plusal", "atrac9",
-        # Weitere
+        # Additional
         "fastaudio", "hca", "hcom", "iac", "interplayacm", "metasound",
         "smackaud", "twinvq", "xma1", "xma2", "siren"
     }
@@ -451,49 +1055,49 @@ def get_audio_codec_compression_type(codec_name: str) -> AudioCompressionBaseTyp
     if normalized_name in lossy_codecs:
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # Spezielle Behandlung für verschiedene Codec-Kategorien
+    # Special handling for different codec categories
     
-    # DSD (Direct Stream Digital) - Spezielles unkomprimiertes Format
+    # DSD (Direct Stream Digital) - Special uncompressed format
     if normalized_name.startswith("dsd_"):
         return AudioCompressionBaseType.UNCOMPRESSED
     
-    # Dolby E - professioneller Broadcast-Codec (verlustbehaftet)
+    # Dolby E - professional broadcast codec (lossy)
     if normalized_name == "dolby_e":
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # DST (Direct Stream Transfer) - verlustfreie DSD-Kompression
+    # DST (Direct Stream Transfer) - lossless DSD compression
     if normalized_name == "dst":
         return AudioCompressionBaseType.LOSSLESS_COMPRESSED
     
-    # DV Audio - verlustbehaftet
+    # DV Audio - lossy
     if normalized_name == "dvaudio":
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # Comfort Noise - spezieller Codec für Sprachpausen
+    # Comfort Noise - special codec for speech pauses
     if normalized_name == "comfortnoise":
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # Wave Synthesis - generiert Audio (verlustbehaftet)
+    # Wave Synthesis - generates audio (lossy)
     if normalized_name == "wavesynth":
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # S302M - professioneller Broadcast-Standard (unkomprimiert)
+    # S302M - professional broadcast standard (uncompressed)
     if normalized_name == "s302m":
         return AudioCompressionBaseType.UNCOMPRESSED
     
-    # Sonic - experimenteller verlustfreier Codec
+    # Sonic - experimental lossless codec
     if normalized_name == "sonic":
         return AudioCompressionBaseType.LOSSLESS_COMPRESSED
     
-    # Spezielle Behandlung für ADPCM-Varianten (meist verlustbehaftet)
+    # Special handling for ADPCM variants (mostly lossy)
     if normalized_name.startswith("adpcm_"):
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # Spezielle Behandlung für G.7xx Codecs (verlustbehaftet)
+    # Special handling for G.7xx codecs (lossy)
     if normalized_name.startswith("g7") and any(c.isdigit() for c in normalized_name):
         return AudioCompressionBaseType.LOSSY_COMPRESSED
     
-    # Unbekannter Codec
+    # Unknown codec
     return AudioCompressionBaseType.UNKNOWN
 
 # Backward compatibility alias
@@ -510,8 +1114,6 @@ audio_codec_compression = get_audio_codec_compression_type
 # Additional Functions for Copy-Mode Detection
 # =============================================
 #
-# These functions should be added to the end of audio_coding.py
-# before the final comments
 
 def can_use_copy_mode(source_codec: str, target_format) -> bool:
     """
@@ -668,8 +1270,6 @@ def should_warn_about_re_encoding(source_codec: str, target_format, target_bitra
 # ############################################################
 
 
-
-
 # ############################################################
 # ############################################################
 #
@@ -701,7 +1301,6 @@ class FileBaseParameters:
 # ############################################################
 # ############################################################
 
-
 # ############################################################
 # ############################################################
 #
@@ -713,26 +1312,26 @@ class FileBaseParameters:
 class QualityAnalyzer:
     """Analyzes audio quality and provides intelligent parameter suggestions"""
     
-    # Ultraschall-Konstanten
-    ULTRASOUND_THRESHOLD = 96000  # 96kS/s als Grenze für Ultraschall
-    ULTRASOUND_REINTERPRET_TARGET = 32000  # 32kS/s für Reinterpretation
+    # Ultrasound constants
+    ULTRASOUND_THRESHOLD = 96000  # 96kS/s as threshold for ultrasound
+    ULTRASOUND_REINTERPRET_TARGET = 32000  # 32kS/s for reinterpretation
     
     @staticmethod
     def _is_ultrasound_recording(sample_rate: int) -> bool:
-        """Prüft, ob es sich um eine Ultraschallaufnahme handelt"""
+        """Check if this is an ultrasound recording"""
         return sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD
     
     @staticmethod
     def _can_use_copy_mode(source_codec: str, target_format: TargetFormats) -> bool:
         """
-        Prüft, ob Copy-Mode (1:1 Übernahme ohne Re-Encoding) möglich ist
+        Check if Copy-Mode (1:1 transfer without re-encoding) is possible
         
         Args:
-            source_codec: Codec der Quelldatei
-            target_format: Gewünschtes Zielformat
+            source_codec: Codec of the source file
+            target_format: Desired target format
             
         Returns:
-            bool: True wenn Copy-Mode möglich
+            bool: True if Copy-Mode is possible
         """
         if not source_codec or not target_format:
             return False
@@ -752,40 +1351,40 @@ class QualityAnalyzer:
     @staticmethod
     def _calculate_aac_upgrade_bitrate(source_bitrate: int, channels: int) -> int:
         """
-        Berechnet optimale AAC-Bitrate für Lossy→AAC Upgrade (Strategy B)
+        Calculate optimal AAC bitrate for Lossy→AAC upgrade (Strategy B)
         
-        Intelligente Bitrate-Berechnung mit adaptiven Faktoren:
-        - Niedrige Quell-Bitrate: Höherer Boost
-        - Hohe Quell-Bitrate: Moderater Boost mit Cap bei 256kbps
+        Intelligent bitrate calculation with adaptive factors:
+        - Low source bitrate: Higher boost
+        - High source bitrate: Moderate boost with cap at 256kbps
         
         Args:
-            source_bitrate: Bitrate der Quelle
-            channels: Anzahl Kanäle
+            source_bitrate: Source bitrate
+            channels: Number of channels
             
         Returns:
-            int: Empfohlene Ziel-Bitrate
+            int: Recommended target bitrate
         """
-        # Adaptive Faktoren basierend auf Quell-Bitrate
-        if source_bitrate < 96000:      # Sehr niedrig
+        # Adaptive factors based on source bitrate
+        if source_bitrate < 96000:      # Very low
             factor = 1.40  # +40%
-        elif source_bitrate < 128000:   # Niedrig
+        elif source_bitrate < 128000:   # Low
             factor = 1.35  # +35%
         elif source_bitrate < 160000:   # Medium
             factor = 1.30  # +30%
-        elif source_bitrate < 192000:   # Gut
+        elif source_bitrate < 192000:   # Good
             factor = 1.25  # +25%
-        elif source_bitrate < 256000:   # Sehr gut
+        elif source_bitrate < 256000:   # Very good
             factor = 1.18  # +18% (minimal)
         else:                           # Exceptional (>256kbps)
-            factor = 1.15  # +15% (sehr zurückhaltend)
+            factor = 1.15  # +15% (very conservative)
         
-        # Grundlegende Berechnung
+        # Basic calculation
         target_bitrate = int(source_bitrate * factor)
         
-        # Mindeststandards für Wildlife/Scientific Recording
-        minimum_mono = 160000      # 160 kbps für Mono
-        minimum_stereo = 190000    # 190 kbps für Stereo
-        minimum_multichannel = 220000  # 220 kbps für >2 Kanäle
+        # Minimum standards for Wildlife/Scientific Recording
+        minimum_mono = 160000      # 160 kbps for Mono
+        minimum_stereo = 190000    # 190 kbps for Stereo
+        minimum_multichannel = 220000  # 220 kbps for >2 channels
         
         if channels == 1:
             minimum = minimum_mono
@@ -794,7 +1393,7 @@ class QualityAnalyzer:
         else:
             minimum = minimum_multichannel
         
-        # Nie unter Mindeststandards, aber auch AAC-LC Maximum beachten
+        # Never below minimum standards, but also respect AAC-LC maximum
         target_bitrate = max(target_bitrate, minimum)
         target_bitrate = min(target_bitrate, 320000)  # AAC-LC Maximum
         
@@ -843,7 +1442,7 @@ class QualityAnalyzer:
         """
         
         if channels == 1:  # Mono
-            if bitrate < 86000:      # that can be critical for environment sound analysis
+            if bitrate < 86000:      # can be critical for environment sound analysis
                 return 'low'
             elif bitrate < 128000:
                 return 'medium' 
@@ -852,8 +1451,8 @@ class QualityAnalyzer:
             else:
                 return 'excessive'
         
-        elif channels == 2:  # Stereo - nicht einfach durch 2 teilen!
-            # AAC Stereo-Effizienz: ~1.3-1.6x statt 2x Mono-Bitrate
+        elif channels == 2:  # Stereo - don't simply divide by 2!
+            # AAC Stereo efficiency: ~1.3-1.6x instead of 2x Mono bitrate
             if bitrate < 110000:     
                 return 'low'
             elif bitrate < 159000:   
@@ -864,8 +1463,8 @@ class QualityAnalyzer:
                 return 'excessive'
         
         else:  # Multichannel (>2)
-            # Für >2 Kanäle: AAC nutzt noch mehr Inter-Channel-Redundanzen
-            per_channel_equivalent = bitrate / (channels * 0.7)  # 30% Effizienz-Bonus
+            # For >2 channels: AAC uses even more inter-channel redundancies
+            per_channel_equivalent = bitrate / (channels * 0.7)  # 30% efficiency bonus
             if per_channel_equivalent < 86000:
                 return 'low'
             elif per_channel_equivalent < 128000:
@@ -882,7 +1481,7 @@ class QualityAnalyzer:
         sample_rate = analysis['sample_rate'] or 44100
         is_ultrasound = analysis.get('is_ultrasound', False)
         
-        # Ultraschall bekommt eigene Kategorie
+        # Ultrasound gets its own category
         if is_ultrasound:
             return 'ultrasound'
         
@@ -908,14 +1507,14 @@ class QualityAnalyzer:
         """
         Suggest optimal target parameters based on source quality
         
-        ENHANCED mit Wildlife/Scientific Audio Strategies:
-        Strategy A: AAC→AAC Copy-Mode (1:1 Übernahme)
-        Strategy B: Lossy→AAC Upgrade mit intelligenter Bitrate
+        ENHANCED with Wildlife/Scientific Audio Strategies:
+        Strategy A: AAC→AAC Copy-Mode (1:1 transfer)
+        Strategy B: Lossy→AAC Upgrade with intelligent bitrate
         Strategy C: Lossless→FLAC Preference
         
         Args:
-            quality_analysis: Quell-Analyse-Ergebnisse
-            current_target_format: Aktuell gewähltes Zielformat (für Copy-Mode Detection)
+            quality_analysis: Source analysis results
+            current_target_format: Currently selected target format (for Copy-Mode detection)
         """
         compression = quality_analysis['compression_type']
         codec_name = quality_analysis.get('codec_name', 'unknown')
@@ -924,22 +1523,22 @@ class QualityAnalyzer:
         
         suggestions = {}
         
-        # STRATEGY A: AAC→AAC Copy-Mode (höchste Priorität)
+        # STRATEGY A: AAC→AAC Copy-Mode (highest priority)
         if (codec_name and codec_name.lower() == 'aac' and 
             current_target_format and current_target_format.code == 'aac'):
             suggestions.update(QualityAnalyzer._suggest_aac_copy_mode(quality_analysis))
             
-        # ultraschall ist ein spezieller Fall
+        # Ultrasound is a special case
         elif QualityAnalyzer._is_ultrasound_recording(sample_rate):
             suggestions.update(QualityAnalyzer._suggest_ultrasound_parameters(quality_analysis))
             
-        # STRATEGY B: Lossy→AAC Upgrade mit intelligenter Bitrate
+        # STRATEGY B: Lossy→AAC Upgrade with intelligent bitrate
         elif compression == AudioCompressionBaseType.LOSSY_COMPRESSED:
             suggestions.update(QualityAnalyzer._suggest_aac_upgrade(quality_analysis))
             
         # STRATEGY C: Lossless→FLAC Preference
         elif compression in [AudioCompressionBaseType.LOSSLESS_COMPRESSED, AudioCompressionBaseType.UNCOMPRESSED]:
-            # Spezialbehandlung für FLAC→FLAC Copy-Mode
+            # Special handling for FLAC→FLAC Copy-Mode
             if (codec_name and codec_name.lower() == 'flac' and 
                 current_target_format and current_target_format.code == 'flac'):
                 suggestions.update(QualityAnalyzer._suggest_flac_copy_mode(quality_analysis))
@@ -955,21 +1554,21 @@ class QualityAnalyzer:
     @staticmethod
     def _suggest_aac_copy_mode(quality_analysis: dict) -> dict:
         """
-        Strategy A: AAC→AAC Copy-Mode Vorschlag
+        Strategy A: AAC→AAC Copy-Mode suggestion
         
-        1:1 Übernahme ohne Re-Encoding = Kein Generationsverlust
+        1:1 transfer without re-encoding = No generation loss
         """
         sample_rate = quality_analysis.get('sample_rate', 44100)
         channels = quality_analysis.get('channels', 2)
         source_bitrate = quality_analysis.get('bit_rate', 160000) or 160000
         
-        # Wähle passende AAC-Variante basierend auf Sample-Rate
+        # Choose appropriate AAC variant based on sample rate
         if sample_rate == 44100:
             target_format = TargetFormats.AAC_44100
         elif sample_rate == 48000:
             target_format = TargetFormats.AAC_48000
         elif sample_rate in [8000, 11025, 12000, 16000, 22050, 24000, 32000, 64000, 88200, 96000]:
-            # Verwende spezifische Sample-Rate wenn verfügbar
+            # Use specific sample rate if available
             format_name = f"AAC_{sample_rate}"
             try:
                 target_format = TargetFormats[format_name]
@@ -981,19 +1580,19 @@ class QualityAnalyzer:
         return {
             'target_format': target_format,
             'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
-            'aac_bitrate': source_bitrate,  # Behalte Original-Bitrate
-            'copy_mode': True,  # Marker für Copy-Mode
-            'reason': f'AAC→AAC Copy-Mode: 1:1 Übernahme ohne Re-Encoding (kein Qualitätsverlust, {channels}ch, {source_bitrate//1000}kbps)'
+            'aac_bitrate': source_bitrate,  # Keep original bitrate
+            'copy_mode': True,  # Marker for Copy-Mode
+            'reason': f'AAC→AAC Copy-Mode: 1:1 transfer without re-encoding (no quality loss, {channels}ch, {source_bitrate//1000}kbps)'
         }
     
     @staticmethod
     def _suggest_flac_copy_mode(quality_analysis: dict) -> dict:
         """
-        FLAC→FLAC Copy-Mode Vorschlag mit Sample-Rate-Preservation
+        FLAC→FLAC Copy-Mode suggestion with sample rate preservation
         """
         sample_rate = quality_analysis.get('sample_rate', 44100)
         
-        # Wähle passende FLAC-Variante
+        # Choose appropriate FLAC variant
         if sample_rate in [8000, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 176400, 192000]:
             format_name = f"FLAC_{sample_rate}"
             try:
@@ -1007,49 +1606,49 @@ class QualityAnalyzer:
             'target_format': target_format,
             'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
             'flac_compression_level': 4,  # Balanced default
-            'copy_mode': True,  # Marker für Copy-Mode
-            'reason': f'FLAC→FLAC Copy-Mode: Verlustfreie 1:1 Übernahme bei {sample_rate//1000}kHz'
+            'copy_mode': True,  # Marker for Copy-Mode
+            'reason': f'FLAC→FLAC Copy-Mode: Lossless 1:1 transfer at {sample_rate//1000}kHz'
         }
     
     @staticmethod
     def _suggest_ultrasound_parameters(quality_analysis: dict) -> dict:
         """
-        Spezielle Behandlung für Ultraschallaufnahmen
+        Special handling for ultrasound recordings
         
-        Regeln:
-        - Lossless Quelle → FLAC mit exakter Sample Rate beibehalten
-        - Lossy gewünscht → Reinterpretation auf 32kS/s (NIEMALS Resampling!)
-        - Sample Rate > 655kHz → FLAC-Limit überschritten, spezielle Behandlung: Reinterpretation
+        Rules:
+        - Lossless source → FLAC with exact sample rate preservation
+        - Lossy desired → Reinterpretation to 32kS/s (NEVER resampling!)
+        - Sample rate > 655kHz → FLAC limit exceeded, special handling: Reinterpretation
         """
         compression = quality_analysis['compression_type']
         sample_rate = quality_analysis.get('sample_rate', 96000)
         
-        # Für Lossless-Quellen: FLAC bevorzugen
+        # For lossless sources: prefer FLAC
         if compression in [AudioCompressionBaseType.LOSSLESS_COMPRESSED, AudioCompressionBaseType.UNCOMPRESSED]:
             
-            if sample_rate <= 655350:  # Innerhalb FLAC-Grenzen
+            if sample_rate <= 655350:  # Within FLAC limits
                 return {
                     'target_format': TargetFormats.FLAC,  # Auto sample rate
                     'target_sampling_transform': TargetSamplingTransforming.EXACTLY,
-                    'flac_compression_level': 6,  # Höhere Kompression für große Ultraschall-Dateien
-                    'reason': f'Ultraschall-Aufnahme ({sample_rate//1000}kHz) → verlustfreie FLAC-Erhaltung'
+                    'flac_compression_level': 6,  # Higher compression for large ultrasound files
+                    'reason': f'Ultrasound recording ({sample_rate//1000}kHz) → lossless FLAC preservation'
                 }
             else:
-                # Über FLAC-Limit → spezielle Behandlung nötig
+                # Beyond FLAC limit → special handling needed
                 return {
                     'target_format': TargetFormats.FLAC_96000,
                     'target_sampling_transform': TargetSamplingTransforming.REINTERPRETING_96000,
                     'flac_compression_level': 6,
-                    'reason': f'Ultraschall {sample_rate//1000}kHz überschreitet FLAC-Limit → Re-Interpreting auf 96kHz'
+                    'reason': f'Ultrasound {sample_rate//1000}kHz exceeds FLAC limit → Re-Interpreting to 96kHz'
                 }
         
-        # Für Lossy-Quellen oder wenn Lossy explizit gewünscht
+        # For lossy sources or when lossy is explicitly desired
         else:
             return {
                 'target_format': TargetFormats.AAC_32000,
                 'target_sampling_transform': TargetSamplingTransforming.REINTERPRETING_32000,
-                'aac_bitrate': 192000,  # Höhere Bitrate für Ultraschall-Reinterpretation
-                'reason': f'Ultraschall-Signal ({sample_rate//1000}kHz) → Reinterpretation auf 32kHz für AAC (16kHz Nyquist)'
+                'aac_bitrate': 192000,  # Higher bitrate for ultrasound reinterpretation
+                'reason': f'Ultrasound signal ({sample_rate//1000}kHz) → Reinterpretation to 32kHz for AAC (16kHz Nyquist)'
             }
     
     @staticmethod
@@ -1057,13 +1656,13 @@ class QualityAnalyzer:
         """
         Strategy B: Suggest AAC parameters for lossy source upgrade
         
-        ENHANCED mit intelligenter Bitrate-Berechnung
+        ENHANCED with intelligent bitrate calculation
         """
         original_bitrate = quality_analysis.get('bit_rate', 128000) or 128000
         sample_rate = quality_analysis.get('sample_rate', 44100)
         channels = quality_analysis.get('channels', 2)
         
-        # Intelligente Bitrate-Berechnung
+        # Intelligent bitrate calculation
         target_bitrate = QualityAnalyzer._calculate_aac_upgrade_bitrate(original_bitrate, channels)
         
         # Choose appropriate AAC format based on sample rate
@@ -1077,7 +1676,7 @@ class QualityAnalyzer:
         else:
             target_format = TargetFormats.AAC  # Let AAC handle high sample rates
         
-        # Berechne Upgrade-Prozentsatz für Anzeige
+        # Calculate upgrade percentage for display
         upgrade_percent = int(((target_bitrate - original_bitrate) / original_bitrate) * 100)
         
         return {
@@ -1090,16 +1689,16 @@ class QualityAnalyzer:
     @staticmethod
     def _suggest_flac_preserve(quality_analysis: dict) -> dict:
         """
-        Strategy C: FLAC-Vorschläge mit Ultraschall-Awareness
+        Strategy C: FLAC suggestions with ultrasound awareness
         """
         sample_rate = quality_analysis.get('sample_rate', 44100)
         
-        # Ultraschall-Bereich?
+        # Ultrasound range?
         if QualityAnalyzer._is_ultrasound_recording(sample_rate):
-            # Delegiere an Ultraschall-Logik
+            # Delegate to ultrasound logic
             return QualityAnalyzer._suggest_ultrasound_parameters(quality_analysis)
         
-        # Standard-Bereich: Bestehende Logik beibehalten
+        # Standard range: keep existing logic
         if sample_rate == 44100:
             target_format = TargetFormats.FLAC_44100
         elif sample_rate == 48000:
@@ -1112,15 +1711,15 @@ class QualityAnalyzer:
             target_format = TargetFormats.FLAC_176400
         elif sample_rate == 192000:
             target_format = TargetFormats.FLAC_192000
-        elif sample_rate <= 655350:  # Standard FLAC-Bereich
+        elif sample_rate <= 655350:  # Standard FLAC range
             target_format = TargetFormats.FLAC  # Auto sample rate
         else:
-            # Sollte nicht erreicht werden, da Ultraschall-Check vorher greift
+            # Should not be reached, as ultrasound check happens beforehand
             target_format = TargetFormats.FLAC_192000
             return {
                 'target_format': target_format,
                 'target_sampling_transform': TargetSamplingTransforming.REINTERPRETING_96000,
-                'reason': f'Sample rate {sample_rate//1000}kHz exceeds FLAC limit → reinterprete to 96kHz'
+                'reason': f'Sample rate {sample_rate//1000}kHz exceeds FLAC limit → reinterpret to 96kHz'
             }
         
         return {
@@ -1174,10 +1773,10 @@ class ConflictAnalyzer:
         """
         Analyze conflicts between source and target parameters
         
-        ENHANCED für Wildlife/Scientific Audio mit:
-        - AAC Multichannel-Problematik
-        - Copy-Mode vs Re-Encoding Warnungen
-        - User-Override Checks für ungünstige Kombinationen
+        ENHANCED for Wildlife/Scientific Audio with:
+        - AAC Multichannel issues
+        - Copy-Mode vs Re-Encoding warnings
+        - User-Override checks for unfavorable combinations
         
         Returns:
             dict: {
@@ -1231,11 +1830,11 @@ class ConflictAnalyzer:
     @staticmethod
     def _check_aac_multichannel_issues(source_analysis: dict, target_params: dict) -> dict:
         """
-        NEW: Prüft AAC Multichannel-Problematik für Wildlife/Scientific Recording
+        NEW: Check AAC Multichannel issues for Wildlife/Scientific Recording
         
-        Unterscheidet zwischen:
-        - Copy-Mode (Quelle bereits AAC): Hinweis auf Analyse-Limitationen
-        - Re-Encoding (andere Quelle): Strikt auf Datenverlust hinweisen
+        Distinguishes between:
+        - Copy-Mode (source already AAC): Note about analysis limitations
+        - Re-Encoding (other source): Strict warning about data loss
         """
         conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
         
@@ -1247,17 +1846,17 @@ class ConflictAnalyzer:
         if target_format and target_format.code == 'aac' and channels > 2:
             
             if copy_mode or source_codec == 'aac':
-                # Copy-Mode: Milde Warnung bezüglich Analyse-Limitationen
+                # Copy-Mode: Mild warning about analysis limitations
                 conflicts['efficiency_warnings'].append(
-                    f"💡 AAC {channels}-Kanal Copy-Mode: Quellmaterial möglicherweise nicht ideal "
-                    f"für stark richtungsabhängige Auswertung (AAC-LC Downmix-Matrix kann räumliche Information beeinträchtigen)."
+                    f"💡 AAC {channels}-channel Copy-Mode: Source material may not be ideal "
+                    f"for highly directional analysis (AAC-LC downmix matrix can affect spatial information)."
                 )
             else:
-                # Re-Encoding: Strikte Warnung vor Datenverlust
+                # Re-Encoding: Strict warning about data loss
                 conflicts['quality_warnings'].append(
-                    f"⚠️  KRITISCH: {channels} Kanäle → AAC Re-Encoding kann räumliche Informationen zerstören! "
-                    f"AAC-LC Channel-Matrix nicht optimal für Scientific Multichannel. "
-                    f"Für Wildlife/Acoustic Monitoring: FLAC empfohlen (verlustfrei bis 8ch)."
+                    f"⚠️  CRITICAL: {channels} channels → AAC Re-Encoding can destroy spatial information! "
+                    f"AAC-LC Channel-Matrix not optimal for Scientific Multichannel. "
+                    f"For Wildlife/Acoustic Monitoring: FLAC recommended (lossless up to 8ch)."
                 )
         
         return conflicts
@@ -1265,7 +1864,7 @@ class ConflictAnalyzer:
     @staticmethod
     def _check_copy_mode_issues(source_analysis: dict, target_params: dict) -> dict:
         """
-        NEW: Prüft Copy-Mode vs Re-Encoding Entscheidungen
+        NEW: Check Copy-Mode vs Re-Encoding decisions
         """
         conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
         
@@ -1278,28 +1877,28 @@ class ConflictAnalyzer:
         if not target_format:
             return conflicts
         
-        # AAC→AAC ohne Copy-Mode gewählt
+        # AAC→AAC without Copy-Mode selected
         if (source_codec == 'aac' and target_format.code == 'aac' and not copy_mode):
             if source_bitrate and aac_bitrate and aac_bitrate > source_bitrate:
                 conflicts['quality_warnings'].append(
-                    f"⚠️  AAC Re-Encoding trotz Up-Bitrating ({source_bitrate//1000}→{aac_bitrate//1000}kbps) "
-                    f"verschlechtert Qualität! Copy-Mode empfohlen für verlustfreie 1:1 Übernahme."
+                    f"⚠️  AAC Re-Encoding despite up-bitrating ({source_bitrate//1000}→{aac_bitrate//1000}kbps) "
+                    f"degrades quality! Copy-Mode recommended for lossless 1:1 transfer."
                 )
             else:
                 conflicts['quality_warnings'].append(
-                    f"⚠️  AAC→AAC Re-Encoding erzeugt Generationsverlust! "
-                    f"Copy-Mode empfohlen für verlustfreie Übernahme der Original-AAC-Daten."
+                    f"⚠️  AAC→AAC Re-Encoding creates generation loss! "
+                    f"Copy-Mode recommended for lossless transfer of original AAC data."
                 )
         
-        # FLAC→FLAC ohne Copy-Mode
+        # FLAC→FLAC without Copy-Mode
         elif (source_codec == 'flac' and target_format.code == 'flac' and not copy_mode):
             source_rate = source_analysis.get('sample_rate', 44100)
             target_sampling = target_params.get('target_sampling_transform')
             
             if target_sampling and target_sampling != TargetSamplingTransforming.EXACTLY:
                 conflicts['efficiency_warnings'].append(
-                    f"💡 FLAC→FLAC mit Sample-Rate-Änderung ({source_rate//1000}kHz): "
-                    f"Eventuell unvorteilhaft. EXACTLY-Modus prüfen für 1:1 Übernahme."
+                    f"💡 FLAC→FLAC with sample rate change ({source_rate//1000}kHz): "
+                    f"May be disadvantageous. Check EXACTLY mode for 1:1 transfer."
                 )
         
         return conflicts
@@ -1312,11 +1911,11 @@ class ConflictAnalyzer:
         source_rate = source_analysis.get('sample_rate', 44100)
         channels = source_analysis.get('channels', 2)
         
-        # ENHANCED: FLAC 8-Kanal-Limit prüfen
+        # ENHANCED: FLAC 8-channel limit check
         if target_format.code == 'flac' and channels > 8:
             conflicts['blocking_conflicts'].append(
-                f"🚫 FLAC unterstützt maximal 8 Kanäle, Quelle hat {channels} Kanäle. "
-                f"Für Mikrofonarrays AAC verwenden oder Kanal-Reduktion erwägen."
+                f"🚫 FLAC supports maximum 8 channels, source has {channels} channels. "
+                f"For microphone arrays use AAC or consider channel reduction."
             )
         
         # Check if target format supports source sample rate
@@ -1357,7 +1956,7 @@ class ConflictAnalyzer:
     @staticmethod
     def _check_quality_degradation(source_analysis: dict, target_params: dict) -> dict:
         """
-        ERWEITERTE METHODE: Check for quality degradation scenarios + Ultraschall-Schutz
+        EXTENDED METHOD: Check for quality degradation scenarios + Ultrasound protection
         """
         conflicts = {'blocking_conflicts': [], 'quality_warnings': [], 'efficiency_warnings': []}
         
@@ -1368,31 +1967,31 @@ class ConflictAnalyzer:
         is_ultrasound = source_analysis.get('is_ultrasound', False)
         copy_mode = target_params.get('copy_mode', False)
         
-        # NEUE PRÜFUNG: Ultraschall-Schutz
+        # NEW CHECK: Ultrasound protection
         if is_ultrasound or source_sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD:
             
-            # Ultraschall + Lossy → Nur Reinterpretation erlaubt
+            # Ultrasound + Lossy → Only reinterpretation allowed
             if target_format and target_format.code == 'aac' and not copy_mode:
                 if target_sampling and target_sampling.code == 'resampling':
                     conflicts['blocking_conflicts'].append(
-                        f"🚫 KRITISCH: Ultraschall-Aufnahme ({source_sample_rate//1000}kHz) + AAC + Resampling! "
-                        f"Ultraschall-Signale werden zerstört. Nutze REINTERPRETING_32000 statt Resampling."
+                        f"🚫 CRITICAL: Ultrasound recording ({source_sample_rate//1000}kHz) + AAC + Resampling! "
+                        f"Ultrasound signals will be destroyed. Use REINTERPRETING_32000 instead of resampling."
                     )
                 elif not target_sampling or (target_sampling.code != 'reinterpreting' and target_sampling != TargetSamplingTransforming.EXACTLY):
                     conflicts['quality_warnings'].append(
-                        f"⚠️  Ultraschall → AAC ohne Reinterpretation. "
-                        f"Empfehlung: target_sampling_transform = 'REINTERPRETING_32000'"
+                        f"⚠️  Ultrasound → AAC without reinterpretation. "
+                        f"Recommendation: target_sampling_transform = 'REINTERPRETING_32000'"
                     )
             
-            # Ultraschall + FLAC über Limit
+            # Ultrasound + FLAC over limit
             elif target_format and target_format.code == 'flac':
                 if source_sample_rate > 655350:
                     conflicts['quality_warnings'].append(
-                        f"⚠️  Ultraschall {source_sample_rate//1000}kHz überschreitet FLAC-Maximum (655kHz). "
-                        f"Resampling auf 192kHz oder Reinterpretation + AAC erwägen."
+                        f"⚠️  Ultrasound {source_sample_rate//1000}kHz exceeds FLAC maximum (655kHz). "
+                        f"Consider resampling to 192kHz or reinterpretation + AAC."
                     )
         
-        # Bestehende Qualitäts-Checks für Standard-Audio (ERWEITERT)
+        # Existing quality checks for standard audio (EXTENDED)
         if (source_compression in [AudioCompressionBaseType.LOSSLESS_COMPRESSED, AudioCompressionBaseType.UNCOMPRESSED] 
             and target_format and target_format.code == 'aac' and not copy_mode):
             
@@ -1401,22 +2000,22 @@ class ConflictAnalyzer:
             target_bitrate = target_params.get('aac_bitrate', 160000)
             channels = source_analysis.get('channels', 2)
             
-            # NEUE PRÜFUNG: Mindeststandards für Scientific Recording
+            # NEW CHECK: Minimum standards for Scientific Recording
             minimum_mono = 160000
             minimum_stereo = 190000
             
             if channels == 1 and target_bitrate < minimum_mono:
                 conflicts['quality_warnings'].append(
-                    f"⚠️  AAC {target_bitrate//1000}kbps für Mono Scientific Recording sehr niedrig. "
-                    f"Empfehlung: ≥{minimum_mono//1000}kbps oder FLAC für verlustfreie Analyse."
+                    f"⚠️  AAC {target_bitrate//1000}kbps for Mono Scientific Recording very low. "
+                    f"Recommendation: ≥{minimum_mono//1000}kbps or FLAC for lossless analysis."
                 )
             elif channels == 2 and target_bitrate < minimum_stereo:
                 conflicts['quality_warnings'].append(
-                    f"⚠️  AAC {target_bitrate//1000}kbps für Stereo Scientific Recording niedrig. "
-                    f"Empfehlung: ≥{minimum_stereo//1000}kbps oder FLAC für bessere Qualität."
+                    f"⚠️  AAC {target_bitrate//1000}kbps for Stereo Scientific Recording low. "
+                    f"Recommendation: ≥{minimum_stereo//1000}kbps or FLAC for better quality."
                 )
             
-            # Qualitätsstufen-spezifische Warnungen
+            # Quality tier-specific warnings
             if source_tier == 'studio' and target_bitrate < 256000:
                 conflicts['quality_warnings'].append(
                     f"Studio quality source → {target_bitrate//1000}kbps AAC. "
@@ -1429,11 +2028,11 @@ class ConflictAnalyzer:
                 )
             elif source_tier == 'ultrasound':
                 conflicts['quality_warnings'].append(
-                    f"Ultraschall-Qualität → {target_bitrate//1000}kbps AAC. "
-                    f"Stelle sicher, dass Reinterpretation auf 32kHz verwendet wird."
+                    f"Ultrasound quality → {target_bitrate//1000}kbps AAC. "
+                    f"Ensure reinterpretation to 32kHz is used."
                 )
         
-        # Check for lossy → lossy re-encoding (ERWEITERT)
+        # Check for lossy → lossy re-encoding (EXTENDED)
         if (source_compression == AudioCompressionBaseType.LOSSY_COMPRESSED 
             and target_format and target_format.code == 'aac' and not copy_mode):
             
@@ -1720,7 +2319,7 @@ class FileParameter:
     
     def _apply_intelligent_suggestions(self):
         """Apply intelligent suggestions for parameters not set by user"""
-        # ENHANCED: Pass current target format für Copy-Mode Detection
+        # ENHANCED: Pass current target format for Copy-Mode detection
         suggestions = QualityAnalyzer.suggest_target_parameters(
             self._quality_analysis, 
             current_target_format=self._target_format
@@ -1905,7 +2504,7 @@ class FileParameter:
             if channels == 1:
                 channel_text = "mono"
             
-            # Ultraschall-Kennzeichnung für Streams
+            # Ultrasound marking for streams
             ultrasound_marker = " 🦇" if sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD else ""
             add_content_line(f"  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}")
             
@@ -2039,7 +2638,7 @@ class FileParameter:
                 add_content_line("📝 <your_instance>.general_meta['format']['tags']  # All tags dict", is_api_line=True)
         
         # ================================================
-        # IMPORT SETTINGS - AM ENDE! (Most important for user)
+        # IMPORT SETTINGS - AT THE END! (Most important for user)
         # ================================================
         add_header("Recommended Import Settings")
         
@@ -2077,7 +2676,7 @@ class FileParameter:
             status_icon = "✅" if 'flac_compression_level' in self._user_defined_params else "🔧"
             add_content_line(f"{status_icon} Compression: FLAC level {self._flac_compression_level}")
         
-        # NEW: Copy-Mode Anzeige
+        # NEW: Copy-Mode display
         is_copy_mode = QualityAnalyzer._can_use_copy_mode(
             self._quality_analysis.get('codec_name', ''), 
             self._target_format
@@ -2500,6 +3099,7 @@ class FileParameter:
     
     def _remove_processed_stream_paths(self, meta_data: dict):
         """Remove already processed stream paths"""
+        streams_section = meta_data.get("streams", [])
         processed_audio_keys = [
             "index", "id", "codec_name", "codec_long_name", "codec_type",
             "codec_tag", "codec_tag_string", "sample_rate", "sample_fmt",
@@ -2705,20 +3305,20 @@ class FileParameter:
 # --------------
 #
 def can_ffmpeg_decode_codec(codec_name:str) -> bool:
-    """Check if a codec can be decoded by installes ffmpeg version."""
+    """Check if a codec can be decoded by installed ffmpeg version."""
     try:
-        # Alle verfügbaren Decoder auflisten
+        # List all available decoders
         result = subprocess.run(['ffmpeg', '-decoders'], 
                               capture_output=True, text=True, check=True)
         
-        # Nach dem Codec suchen (case-insensitive)
+        # Search for the codec (case-insensitive)
         pattern = rf'\b{re.escape(codec_name)}\b'
         return bool(re.search(pattern, result.stdout, re.IGNORECASE))
         
     except subprocess.CalledProcessError:
         return False
     except FileNotFoundError:
-        print("ffmpeg nicht gefunden")
+        print("ffmpeg not found")
         return False
 
 # End of Common helpers
