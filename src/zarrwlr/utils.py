@@ -273,23 +273,4 @@ def check_ffmpeg_tools():
 
 
 
-def can_ffmpeg_decode_codec(codec_name:str) -> bool:
-    """Check if a codec can be decoded by installes ffmpeg version."""
-    try:
-        # Alle verfügbaren Decoder auflisten
-        result = subprocess.run(['ffmpeg', '-decoders'], 
-                              capture_output=True, text=True, check=True)
-        
-        # Nach dem Codec suchen (case-insensitive)
-        pattern = rf'\b{re.escape(codec_name)}\b'
-        return bool(re.search(pattern, result.stdout, re.IGNORECASE))
-        
-    except subprocess.CalledProcessError:
-        return False
-    except FileNotFoundError:
-        print("ffmpeg nicht gefunden")
-        return False
-
-
-
 logger.debug("Module loaded.")
