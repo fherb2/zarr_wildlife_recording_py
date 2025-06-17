@@ -861,280 +861,517 @@ class FileParameter:
         """
         return self._create_formatted_output()
     
-def _create_formatted_output(self) -> str:
-    """Create beautifully formatted terminal output - METADATA FIRST, IMPORT LAST"""
-    lines = []
-    
-    # Feste Box-Breite definieren
-    BOX_WIDTH = 62  # Gesamtbreite der Box
-    CONTENT_WIDTH = BOX_WIDTH - 4  # Abzüglich "│ " und " │"
-    
-    def format_line(content: str) -> str:
-        """Format a line to exact box width"""
-        if len(content) <= CONTENT_WIDTH:
-            padding = CONTENT_WIDTH - len(content)
-            return f"│ {content}{' ' * padding} │"
+    def _create_formatted_output(self) -> str:
+        """Create beautifully formatted terminal output with dynamic box width (up to 180 chars)"""
+        
+        def get_display_width(text: str) -> int:
+            """Get actual display width considering Unicode emoji/symbols that appear 2 chars wide"""
+            # Known emoji/symbols that appear as 2 characters wide in terminals
+            wide_chars = '🔧✅🟢📝💡⚠️🚫🦇'
+            
+            width = 0
+            for char in text:
+                if char in wide_chars:
+                    width += 2  # These emoji appear 2 chars wide
+                else:
+                    width += 1  # Regular characters
+            return width
+        
+        # Phase 1: Collect all content lines without box formatting
+        content_lines = []
+        
+        # Constants for content limits
+        MAX_TOTAL_LINE_LENGTH = 180
+        CONFLICT_WRAP_LENGTH = 120
+        MAX_CONTENT_LENGTH = MAX_TOTAL_LINE_LENGTH - 4  # Reserve space for "│ " and " │"
+        
+        def add_content_line(text: str, is_api_line: bool = False):
+            """Add a content line, applying length limits based on type"""
+            if is_api_line:
+                # API lines can exceed normal limits and break out of box if needed
+                content_lines.append(text)
+            else:
+                # Regular content gets truncated at max length (using display width)
+                if get_display_width(text) > MAX_CONTENT_LENGTH:
+                    # Truncate considering display width
+                    truncated = ""
+                    current_width = 0
+                    for char in text:
+                        char_width = 2 if char in '🔧✅🟢📝💡⚠️🚫🦇' else 1
+                        if current_width + char_width + 3 > MAX_CONTENT_LENGTH:  # +3 for "..."
+                            break
+                        truncated += char
+                        current_width += char_width
+                    content_lines.append(truncated + "...")
+                else:
+                    content_lines.append(text)
+        
+        def add_header(title: str):
+            """Add a section header (will be formatted with ├─ and ─┤ later)"""
+            content_lines.append(f"HEADER:{title}")
+        
+        # Header with basic file info
+        add_content_line("Audio File Analysis")
+        add_content_line(f"File: {self._base_parameter.file.name}")
+        
+        file_size_mb = self._base_parameter.file_size_bytes / 1024 / 1024
+        add_content_line(f"Size: {file_size_mb:.1f} MB, Container: {self._base_parameter.container_format_name}")
+        add_content_line(f"SHA256: {self._base_parameter.file_sh256[:20]}...")
+        # API access for basic file info
+        add_content_line("📝 <your_instance>.base_parameter.file", is_api_line=True)
+        add_content_line("📝 <your_instance>.base_parameter.file_size_bytes", is_api_line=True)
+        add_content_line("📝 <your_instance>.base_parameter.file_sh256", is_api_line=True)
+        
+        # ================================================
+        # CONTAINER METADATA SECTION
+        # ================================================
+        add_header("Container Metadata")
+        
+        container = self._container
+        if container.get('format_long_name'):
+            add_content_line(f"Format: {container['format_long_name']}")
+        
+        if container.get('duration'):
+            duration = container['duration']
+            duration_str = f"{int(duration//3600):02d}:{int((duration%3600)//60):02d}:{int(duration%60):02d}.{int((duration%1)*100):02d}"
+            add_content_line(f"Duration: {duration_str}")
+        
+        if container.get('bit_rate'):
+            total_bitrate = container['bit_rate'] // 1000
+            add_content_line(f"Total Bitrate: {total_bitrate} kbps")
+        
+        if container.get('nb_streams'):
+            add_content_line(f"Streams: {container['nb_streams']} total")
+        
+        # API access hints for known container metadata
+        add_content_line("📝 <your_instance>.container['format_long_name']", is_api_line=True)
+        add_content_line("📝 <your_instance>.container['duration']", is_api_line=True)
+        add_content_line("📝 <your_instance>.container['bit_rate']", is_api_line=True)
+        add_content_line("📝 <your_instance>.container['nb_streams']", is_api_line=True)
+        
+        # ================================================
+        # ADDITIONAL CONTAINER METADATA (Unknown/Unexpected fields)
+        # ================================================
+        remaining_format = self._general_meta.get('format', {})
+        if remaining_format:
+            # Filter out tags (handled separately) and empty values
+            additional_container = {k: v for k, v in remaining_format.items() 
+                                if k != 'tags' and v is not None and str(v).strip()}
+            
+            if additional_container:
+                add_header("Additional Container Metadata")
+                
+                # Show the additional fields
+                for key, value in sorted(additional_container.items()):
+                    add_content_line(f"{key}: {str(value)}")
+                
+                # API access hints - specific for each shown field
+                for key in sorted(additional_container.keys()):
+                    add_content_line(f"📝 <your_instance>.general_meta['format']['{key}']", is_api_line=True)
+        
+        # ================================================
+        # AUDIO STREAMS DETAIL SECTION
+        # ================================================
+        add_header("Audio Streams Detail")
+        
+        for i, stream in enumerate(self._audio_streams):
+            stream_marker = "→" if stream['index'] in self._base_parameter.selected_audio_streams else " "
+            codec_name = stream['codec_name'] or 'unknown'
+            add_content_line(f"{stream_marker}Stream #{stream['index']}: {codec_name}")
+            
+            # Basic stream info
+            channels = stream.get('channels', 0)
+            sample_rate = stream.get('sample_rate', 0)
+            channel_text = f"{channels} channels" if channels != 2 else "stereo"
+            if channels == 1:
+                channel_text = "mono"
+            
+            # Ultraschall-Kennzeichnung für Streams
+            ultrasound_marker = " 🦇" if sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD else ""
+            add_content_line(f"  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}")
+            
+            # Channel layout
+            if stream.get('channel_layout') and stream['channel_layout'] not in ['stereo', 'mono']:
+                add_content_line(f"  Layout: {stream['channel_layout']}")
+            
+            # Sample format and bits per sample
+            if stream.get('sample_fmt') or stream.get('bits_per_sample'):
+                sample_info = f"{stream.get('sample_fmt', 'unknown')}"
+                if stream.get('bits_per_sample'):
+                    sample_info += f", {stream['bits_per_sample']} bits"
+                add_content_line(f"  Sample: {sample_info}")
+            
+            # Stream-specific bitrate
+            if stream.get('bit_rate'):
+                stream_bitrate = stream['bit_rate'] // 1000
+                add_content_line(f"  Bitrate: {stream_bitrate} kbps")
+            
+            # Disposition flags (if any interesting ones)
+            if stream.get('disposition'):
+                disp_flags = []
+                for key, value in stream['disposition'].items():
+                    if value and key in ['default', 'forced', 'comment', 'lyrics', 'karaoke']:
+                        disp_flags.append(key)
+                if disp_flags:
+                    flags_str = ', '.join(disp_flags)
+                    add_content_line(f"  Flags: {flags_str}")
+            
+            if i < len(self._audio_streams) - 1:  # Add separator between streams
+                add_content_line("SEPARATOR")
+        
+        # API access hints for known audio stream fields
+        add_content_line("📝 <your_instance>.audio_streams[0]['codec_name']", is_api_line=True)
+        add_content_line("📝 <your_instance>.audio_streams[0]['channels']", is_api_line=True)
+        add_content_line("📝 <your_instance>.audio_streams[0]['sample_rate']", is_api_line=True)
+        add_content_line("📝 <your_instance>.audio_streams[0]['bit_rate']", is_api_line=True)
+        
+        # ================================================
+        # ADDITIONAL AUDIO STREAM METADATA (Unknown/Unexpected fields)
+        # ================================================
+        general_streams = self._general_meta.get('streams', [])
+        audio_general_streams = [s for s in general_streams if s.get('codec_type') == 'audio']
+        
+        if audio_general_streams:
+            additional_audio_found = False
+            
+            for i, general_stream in enumerate(audio_general_streams):
+                # Find any fields that are not empty and not already processed
+                additional_fields = {k: v for k, v in general_stream.items() 
+                                if v is not None and str(v).strip() and k != 'codec_type'}
+                
+                if additional_fields:
+                    if not additional_audio_found:
+                        add_header("Additional Audio Stream Metadata")
+                        additional_audio_found = True
+                    
+                    stream_index = general_stream.get('index', i)
+                    add_content_line(f"Stream #{stream_index} additional fields:")
+                    
+                    # Collect shown fields for API hints
+                    shown_fields = []
+                    shown_additional = 0
+                    
+                    for key, value in sorted(additional_fields.items()):
+                        if shown_additional >= 6:  # Limit to 6 additional fields per stream
+                            remaining_count = len(additional_fields) - shown_additional
+                            add_content_line(f"  ... and {remaining_count} more fields")
+                            break
+                        
+                        add_content_line(f"  {key}: {str(value)}")
+                        shown_fields.append(key)
+                        shown_additional += 1
+                    
+                    # Add specific API hints for shown fields
+                    for field_key in shown_fields:
+                        add_content_line(f"📝 <your_instance>.general_meta['streams'][{stream_index}]['{field_key}']", is_api_line=True)
+        
+        # ================================================
+        # OTHER STREAMS SECTION (if any)
+        # ================================================
+        if self._other_streams:
+            add_header("Other Streams")
+            
+            for stream in self._other_streams:
+                codec_type = stream.get('codec_type', 'unknown')
+                codec_name = stream.get('codec_name', 'unknown')
+                add_content_line(f"Stream #{stream['index']}: {codec_type} ({codec_name})")
+            
+            # API access hints
+            add_content_line("📝 <your_instance>.other_streams[0]['codec_type']", is_api_line=True)
+            add_content_line("📝 <your_instance>.other_streams[0]['codec_name']", is_api_line=True)
+        
+        # ================================================
+        # METADATA TAGS SECTION (Complete, not just important ones)
+        # ================================================
+        format_tags = self._general_meta.get('format', {}).get('tags', {})
+        if format_tags:
+            add_header("Metadata Tags")
+            
+            # Show ALL tags, but prioritize important ones first
+            important_tags = ['title', 'artist', 'album', 'date', 'genre', 'comment']
+            displayed_tags = []
+            
+            # First show important tags
+            for tag in important_tags:
+                if tag in format_tags:
+                    add_content_line(f"{tag.capitalize()}: {str(format_tags[tag])}")
+                    displayed_tags.append(tag)
+            
+            # Then show all remaining tags
+            remaining_tags = {k: v for k, v in format_tags.items() if k not in displayed_tags}
+            if remaining_tags:
+                if displayed_tags:  # Add separator if we showed important tags first
+                    add_content_line("--- Additional Tags ---")
+                
+                for tag, value in sorted(remaining_tags.items()):
+                    add_content_line(f"{tag}: {str(value)}")
+                    displayed_tags.append(tag)
+            
+            # API access hints for all displayed tags
+            if len(displayed_tags) <= 3:
+                # Show individual access for few tags
+                for tag in displayed_tags:
+                    add_content_line(f"📝 <your_instance>.general_meta['format']['tags']['{tag}']", is_api_line=True)
+            else:
+                # Show individual access for each tag (no more templates or examples)
+                for tag in displayed_tags:
+                    add_content_line(f"📝 <your_instance>.general_meta['format']['tags']['{tag}']", is_api_line=True)
+                # Add general access pattern as additional info
+                add_content_line("📝 <your_instance>.general_meta['format']['tags']  # All tags dict", is_api_line=True)
+        
+        # ================================================
+        # IMPORT SETTINGS - AM ENDE! (Most important for user)
+        # ================================================
+        add_header("Recommended Import Settings")
+        
+        # Primary audio stream info for import
+        if self._base_parameter.stream_parameters:
+            primary_stream = self._base_parameter.stream_parameters[0]
+            codec_name = primary_stream.codec_name or "unknown"
+            compression_type = self._quality_analysis.get('compression_type', AudioCompressionBaseType.UNKNOWN)
+            
+            # Format compression type display
+            compression_display = {
+                AudioCompressionBaseType.UNCOMPRESSED: "uncompressed",
+                AudioCompressionBaseType.LOSSLESS_COMPRESSED: "lossless",
+                AudioCompressionBaseType.LOSSY_COMPRESSED: "lossy",
+                AudioCompressionBaseType.UNKNOWN: "unknown"
+            }.get(compression_type, "unknown")
+            
+            add_content_line(f"Source: {codec_name} ({compression_display})")
+        
+        # Show current/suggested parameters
+        if self._target_format:
+            status_icon = "✅" if 'target_format' in self._user_defined_params else "🔧"
+            add_content_line(f"{status_icon} Target: {self._target_format.name}")
+        
+        if self._target_sampling_transform:
+            status_icon = "✅" if 'target_sampling_transform' in self._user_defined_params else "🔧"
+            add_content_line(f"{status_icon} Sampling: {self._target_sampling_transform.name}")
+        
+        # Codec-specific parameters
+        if self._target_format and self._target_format.code == 'aac' and self._aac_bitrate:
+            status_icon = "✅" if 'aac_bitrate' in self._user_defined_params else "🔧"
+            add_content_line(f"{status_icon} Bitrate: AAC {self._aac_bitrate//1000} kbps")
+        
+        if self._target_format and self._target_format.code == 'flac':
+            status_icon = "✅" if 'flac_compression_level' in self._user_defined_params else "🔧"
+            add_content_line(f"{status_icon} Compression: FLAC level {self._flac_compression_level}")
+        
+        # Show reasoning if suggestions were applied
+        suggestions = QualityAnalyzer.suggest_target_parameters(self._quality_analysis)
+        if 'reason' in suggestions and not all(param in self._user_defined_params for param in ['target_format', 'aac_bitrate', 'flac_compression_level']):
+            # Simple highlighted rationale line instead of complex box
+            reason = suggestions['reason']
+            add_content_line(f">>> {reason} <<<")
+        
+        # API access hints for import parameters - conditional based on target format
+        add_content_line("📝 <your_instance>.target_format", is_api_line=True)
+        add_content_line("📝 <your_instance>.target_sampling_transform", is_api_line=True)
+        
+        # Codec-specific API hints - only show relevant ones
+        if self._target_format and self._target_format.code == 'aac':
+            add_content_line("📝 <your_instance>.aac_bitrate", is_api_line=True)
+        elif self._target_format and self._target_format.code == 'flac':
+            add_content_line("📝 <your_instance>.flac_compression_level", is_api_line=True)
         else:
-            # Truncate if too long
-            truncated = content[:CONTENT_WIDTH-3] + "..."
-            return f"│ {truncated} │"
-    
-    def format_header(title: str) -> str:
-        """Format a section header"""
-        padding_needed = CONTENT_WIDTH - len(title) - 2  # -2 for "─ " prefix
-        if padding_needed < 0:
-            title = title[:CONTENT_WIDTH-5] + "..."
-            padding_needed = 0
-        return f"├─ {title} {'─' * padding_needed}┤"
-    
-    # Header with basic file info
-    lines.append("╭" + "─" * (BOX_WIDTH - 2) + "╮")
-    lines.append(format_line(f"Audio File Analysis"))
-    lines.append(format_line(f"File: {self._base_parameter.file.name}"))
-    
-    file_size_mb = self._base_parameter.file_size_bytes / 1024 / 1024
-    lines.append(format_line(f"Size: {file_size_mb:.1f} MB, Container: {self._base_parameter.container_format_name}"))
-    lines.append(format_line(f"SHA256: {self._base_parameter.file_sh256[:20]}..."))
-    
-    # ================================================
-    # CONTAINER METADATA SECTION
-    # ================================================
-    lines.append(format_header("Container Metadata"))
-    
-    container = self._container
-    if container.get('format_long_name'):
-        format_long = container['format_long_name']
-        if len(format_long) > CONTENT_WIDTH - 8:  # "Format: " = 8 chars
-            format_long = format_long[:CONTENT_WIDTH-11] + "..."
-        lines.append(format_line(f"Format: {format_long}"))
-    
-    if container.get('duration'):
-        duration = container['duration']
-        duration_str = f"{int(duration//3600):02d}:{int((duration%3600)//60):02d}:{int(duration%60):02d}.{int((duration%1)*100):02d}"
-        lines.append(format_line(f"Duration: {duration_str}"))
-    
-    if container.get('bit_rate'):
-        total_bitrate = container['bit_rate'] // 1000
-        lines.append(format_line(f"Total Bitrate: {total_bitrate} kbps"))
-    
-    if container.get('nb_streams'):
-        lines.append(format_line(f"Streams: {container['nb_streams']} total"))
-    
-    # API access hint
-    lines.append(format_line("📝 <your_instance>.container['format_name']"))
-    
-    # ================================================
-    # AUDIO STREAMS DETAIL SECTION
-    # ================================================
-    lines.append(format_header("Audio Streams Detail"))
-    
-    for i, stream in enumerate(self._audio_streams):
-        stream_marker = "→" if stream['index'] in self._base_parameter.selected_audio_streams else " "
-        codec_name = stream['codec_name'] or 'unknown'
-        lines.append(format_line(f"{stream_marker}Stream #{stream['index']}: {codec_name}"))
+            # If no specific target format, show both with note
+            add_content_line("📝 <your_instance>.aac_bitrate  # if using AAC", is_api_line=True)
+            add_content_line("📝 <your_instance>.flac_compression_level  # if using FLAC", is_api_line=True)
         
-        # Basic stream info
-        channels = stream.get('channels', 0)
-        sample_rate = stream.get('sample_rate', 0)
-        channel_text = f"{channels} channels" if channels != 2 else "stereo"
-        if channels == 1:
-            channel_text = "mono"
+        add_content_line("📝 <your_instance>.get_import_parameters()", is_api_line=True)
         
-        # Ultraschall-Kennzeichnung für Streams
-        ultrasound_marker = " 🦇" if sample_rate > QualityAnalyzer.ULTRASOUND_THRESHOLD else ""
-        lines.append(format_line(f"  {channel_text}, {sample_rate:,} Hz{ultrasound_marker}"))
+        # Warnings and conflicts section
+        if self._conflicts:
+            if self._conflicts['quality_warnings'] or self._conflicts['efficiency_warnings'] or self._conflicts['blocking_conflicts']:
+                add_header("Warnings & Issues")
+                
+                # Blocking conflicts (critical)
+                for conflict in self._conflicts['blocking_conflicts']:
+                    conflict_text = f"🚫 {conflict}"
+                    wrapped_lines = self._wrap_text(conflict_text, CONFLICT_WRAP_LENGTH)
+                    for line in wrapped_lines:
+                        add_content_line(line)
+                
+                # Quality warnings
+                for warning in self._conflicts['quality_warnings']:
+                    warning_text = f"⚠️  {warning}"
+                    wrapped_lines = self._wrap_text(warning_text, CONFLICT_WRAP_LENGTH)
+                    for line in wrapped_lines:
+                        add_content_line(line)
+                
+                # Efficiency warnings
+                for warning in self._conflicts['efficiency_warnings']:
+                    warning_text = f"💡 {warning}"
+                    wrapped_lines = self._wrap_text(warning_text, CONFLICT_WRAP_LENGTH)
+                    for line in wrapped_lines:
+                        add_content_line(line)
+                
+                # API access for conflicts
+                add_content_line("📝 <your_instance>.conflicts", is_api_line=True)
+                add_content_line("📝 <your_instance>.has_blocking_conflicts", is_api_line=True)
         
-        # Channel layout
-        if stream.get('channel_layout') and stream['channel_layout'] not in ['stereo', 'mono']:
-            layout = stream['channel_layout']
-            if len(layout) > CONTENT_WIDTH - 10:  # "Layout: " = 8 chars + some margin
-                layout = layout[:CONTENT_WIDTH-13] + "..."
-            lines.append(format_line(f"  Layout: {layout}"))
+        # Status section - FINAL
+        add_header("Status")
+        if self._can_be_imported:
+            add_content_line("🟢 Ready for import")
+        else:
+            add_content_line("🔴 Import blocked - resolve conflicts above")
         
-        # Sample format and bits per sample
-        if stream.get('sample_fmt') or stream.get('bits_per_sample'):
-            sample_info = f"{stream.get('sample_fmt', 'unknown')}"
-            if stream.get('bits_per_sample'):
-                sample_info += f", {stream['bits_per_sample']} bits"
-            lines.append(format_line(f"  Sample: {sample_info}"))
+        # API access for status
+        add_content_line("📝 <your_instance>.can_be_imported", is_api_line=True)
         
-        # Stream-specific bitrate
-        if stream.get('bit_rate'):
-            stream_bitrate = stream['bit_rate'] // 1000
-            lines.append(format_line(f"  Bitrate: {stream_bitrate} kbps"))
+        # ================================================
+        # OTHER FILE METADATA (chapters, programs, etc.)
+        # ================================================
+        other_metadata_found = False
         
-        # Disposition flags (if any interesting ones)
-        if stream.get('disposition'):
-            disp_flags = []
-            for key, value in stream['disposition'].items():
-                if value and key in ['default', 'forced', 'comment', 'lyrics', 'karaoke']:
-                    disp_flags.append(key)
-            if disp_flags:
-                flags_str = ', '.join(disp_flags)
-                if len(flags_str) > CONTENT_WIDTH - 9:  # "Flags: " = 7 chars + margin
-                    flags_str = flags_str[:CONTENT_WIDTH-12] + "..."
-                lines.append(format_line(f"  Flags: {flags_str}"))
-        
-        if i < len(self._audio_streams) - 1:  # Add separator between streams
-            lines.append("│" + "─" * (BOX_WIDTH - 2) + "│")
-    
-    # API access hint for audio streams
-    lines.append(format_line("📝 <your_instance>.audio_streams[0]['codec_name']"))
-    
-    # ================================================
-    # OTHER STREAMS SECTION (if any)
-    # ================================================
-    if self._other_streams:
-        lines.append(format_header("Other Streams"))
-        
-        for stream in self._other_streams:
-            codec_type = stream.get('codec_type', 'unknown')
-            codec_name = stream.get('codec_name', 'unknown')
-            stream_info = f"Stream #{stream['index']}: {codec_type} ({codec_name})"
-            lines.append(format_line(stream_info))
-        
-        # API access hint
-        lines.append(format_line("📝 <your_instance>.other_streams[0]['codec_type']"))
-    
-    # ================================================
-    # METADATA TAGS SECTION (if available)
-    # ================================================
-    format_tags = self._general_meta.get('format', {}).get('tags', {})
-    if format_tags:
-        lines.append(format_header("Metadata Tags"))
-        
-        # Show most important tags
-        important_tags = ['title', 'artist', 'album', 'date', 'genre', 'comment']
-        shown_tags = 0
-        for tag in important_tags:
-            if tag in format_tags and shown_tags < 4:  # Limit to 4 tags to save space
-                value = str(format_tags[tag])
-                # Calculate available space for value
-                tag_label = f"{tag.capitalize()}: "
-                available_space = CONTENT_WIDTH - len(tag_label)
-                if len(value) > available_space:
-                    value = value[:available_space-3] + "..."
-                lines.append(format_line(f"{tag_label}{value}"))
-                shown_tags += 1
-        
-        # Show total count if more tags exist
-        total_tags = len(format_tags)
-        if total_tags > shown_tags:
-            lines.append(format_line(f"... and {total_tags - shown_tags} more tags"))
-        
-        # API access hint
-        lines.append(format_line("📝 <your_instance>.general_meta['format']['tags']"))
-    
-    # ================================================
-    # IMPORT SETTINGS - AM ENDE! (Most important for user)
-    # ================================================
-    lines.append(format_header("Recommended Import Settings"))
-    
-    # Primary audio stream info for import
-    if self._base_parameter.stream_parameters:
-        primary_stream = self._base_parameter.stream_parameters[0]
-        codec_name = primary_stream.codec_name or "unknown"
-        compression_type = self._quality_analysis.get('compression_type', AudioCompressionBaseType.UNKNOWN)
-        
-        # Format compression type display
-        compression_display = {
-            AudioCompressionBaseType.UNCOMPRESSED: "uncompressed",
-            AudioCompressionBaseType.LOSSLESS_COMPRESSED: "lossless",
-            AudioCompressionBaseType.LOSSY_COMPRESSED: "lossy",
-            AudioCompressionBaseType.UNKNOWN: "unknown"
-        }.get(compression_type, "unknown")
-        
-        lines.append(format_line(f"Source: {codec_name} ({compression_display})"))
-    
-    # Show current/suggested parameters
-    if self._target_format:
-        status_icon = "✅" if 'target_format' in self._user_defined_params else "🔧"
-        format_name = self._target_format.name
-        lines.append(format_line(f"{status_icon} Target: {format_name}"))
-    
-    if self._target_sampling_transform:
-        status_icon = "✅" if 'target_sampling_transform' in self._user_defined_params else "🔧"
-        transform_name = self._target_sampling_transform.name
-        lines.append(format_line(f"{status_icon} Sampling: {transform_name}"))
-    
-    # Codec-specific parameters
-    if self._target_format and self._target_format.code == 'aac' and self._aac_bitrate:
-        status_icon = "✅" if 'aac_bitrate' in self._user_defined_params else "🔧"
-        bitrate_str = f"AAC {self._aac_bitrate//1000} kbps"
-        lines.append(format_line(f"{status_icon} Bitrate: {bitrate_str}"))
-    
-    if self._target_format and self._target_format.code == 'flac':
-        status_icon = "✅" if 'flac_compression_level' in self._user_defined_params else "🔧"
-        compression_str = f"FLAC level {self._flac_compression_level}"
-        lines.append(format_line(f"{status_icon} Compression: {compression_str}"))
-    
-    # Show reasoning if suggestions were applied
-    suggestions = QualityAnalyzer.suggest_target_parameters(self._quality_analysis)
-    if 'reason' in suggestions and not all(param in self._user_defined_params for param in ['target_format', 'aac_bitrate', 'flac_compression_level']):
-        # Rationale box - nested box design
-        lines.append(format_line("┌─ Rationale " + "─" * (CONTENT_WIDTH - 13) + "┐"))
-        reason = suggestions['reason']
-        # Word wrap the reason text
-        reason_lines = self._wrap_text(reason, CONTENT_WIDTH - 6)  # -6 for "│ │ " and " │ │"
-        for reason_line in reason_lines:
-            lines.append(format_line(f"│ {reason_line.ljust(CONTENT_WIDTH - 6)} │"))
-        lines.append(format_line("└" + "─" * (CONTENT_WIDTH - 2) + "┘"))
-    
-    # API access hints for import parameters
-    lines.append(format_line("📝 <your_instance>.target_format"))
-    lines.append(format_line("📝 <your_instance>.get_import_parameters()"))
-    
-    # Warnings and conflicts section
-    if self._conflicts:
-        if self._conflicts['quality_warnings'] or self._conflicts['efficiency_warnings'] or self._conflicts['blocking_conflicts']:
-            lines.append(format_header("Warnings & Issues"))
+        # Check for chapters
+        chapters = self._general_meta.get('chapters', [])
+        if chapters:
+            if not other_metadata_found:
+                add_header("Other File Metadata")
+                other_metadata_found = True
             
-            # Blocking conflicts (critical)
-            for conflict in self._conflicts['blocking_conflicts']:
-                conflict_text = f"🚫 {conflict}"
-                wrapped_lines = self._wrap_text(conflict_text, CONTENT_WIDTH)
-                for line in wrapped_lines:
-                    lines.append(format_line(line))
+            add_content_line(f"Chapters: {len(chapters)} found")
+            # Show first few chapters as examples
+            for i, chapter in enumerate(chapters[:2]):  # Limit to first 2 chapters
+                title = chapter.get('tags', {}).get('title', f'Chapter {i+1}')
+                start_time = chapter.get('start_time', 'unknown')
+                end_time = chapter.get('end_time', 'unknown')
+                add_content_line(f"  {title}: {start_time}s - {end_time}s")
             
-            # Quality warnings
-            for warning in self._conflicts['quality_warnings']:
-                warning_text = f"⚠️  {warning}"
-                wrapped_lines = self._wrap_text(warning_text, CONTENT_WIDTH)
-                for line in wrapped_lines:
-                    lines.append(format_line(line))
+            if len(chapters) > 2:
+                add_content_line(f"  ... and {len(chapters)-2} more chapters")
             
-            # Efficiency warnings
-            for warning in self._conflicts['efficiency_warnings']:
-                warning_text = f"💡 {warning}"
-                wrapped_lines = self._wrap_text(warning_text, CONTENT_WIDTH)
-                for line in wrapped_lines:
-                    lines.append(format_line(line))
-    
-    # Status section - FINAL
-    lines.append(format_header("Status"))
-    if self._can_be_imported:
-        lines.append(format_line("🟢 Ready for import"))
-    else:
-        lines.append(format_line("🔴 Import blocked - resolve conflicts above"))
-    
-    # Legend for icons - FINAL
-    lines.append(format_line(""))  # Empty line
-    legend_text = "Legend: ✅=User set, 🔧=Auto-suggested, 📝=API access"
-    if self._quality_analysis.get('is_ultrasound', False):
-        legend_text += ", 🦇=Ultrasound"
-    
-    # Split legend if too long
-    if len(legend_text) <= CONTENT_WIDTH:
-        lines.append(format_line(legend_text))
-    else:
-        legend_lines = self._wrap_text(legend_text, CONTENT_WIDTH)
+            add_content_line("📝 <your_instance>.general_meta['chapters']", is_api_line=True)
+            add_content_line("📝 Example: ...['chapters'][0]['tags']['title']", is_api_line=True)
+        
+        # Check for programs
+        programs = self._general_meta.get('programs', [])
+        if programs:
+            if not other_metadata_found:
+                add_header("Other File Metadata")
+                other_metadata_found = True
+            
+            add_content_line(f"Programs: {len(programs)} found")
+            add_content_line("📝 <your_instance>.general_meta['programs']", is_api_line=True)
+        
+        # Check for any other top-level keys we haven't processed
+        processed_top_level = {'format', 'streams', 'chapters', 'programs'}
+        remaining_top_level = {k: v for k, v in self._general_meta.items() 
+                            if k not in processed_top_level and k != 'user_meta' 
+                            and v is not None and str(v).strip()}
+        
+        if remaining_top_level:
+            if not other_metadata_found:
+                add_header("Other File Metadata")
+                other_metadata_found = True
+            
+            for key, value in sorted(remaining_top_level.items()):
+                # Handle different types of values
+                if isinstance(value, (dict, list)):
+                    count = len(value) if hasattr(value, '__len__') else 'complex'
+                    add_content_line(f"{key}: {count} items")
+                else:
+                    add_content_line(f"{key}: {str(value)}")
+                
+                # Specific API access for each field
+                add_content_line(f"📝 <your_instance>.general_meta['{key}']", is_api_line=True)
+        
+        # Legend for icons - FINAL
+        add_content_line("")  # Empty line
+        legend_text = "Legend: ✅=User set, 🔧=Auto-suggested, 📝=API access"
+        if self._quality_analysis.get('is_ultrasound', False):
+            legend_text += ", 🦇=Ultrasound"
+        
+        # Split legend if too long (using CONFLICT_WRAP_LENGTH)
+        legend_lines = self._wrap_text(legend_text, CONFLICT_WRAP_LENGTH)
         for legend_line in legend_lines:
-            lines.append(format_line(legend_line))
-    
-    lines.append("╰" + "─" * (BOX_WIDTH - 2) + "╯")
-    
-    return "\n".join(lines)
-    
+            add_content_line(legend_line)
+        
+        # ================================================
+        # Phase 2: Format all content with dynamic box width using display width
+        # ================================================
+        
+        # Find the maximum content display width (exclude rationale box elements from calculation)
+        max_content_width = 0
+        for line in content_lines:
+            # Skip special markers and rationale elements when calculating max width
+            if line.startswith(('HEADER:', 'SEPARATOR', 'RATIONALE_')):
+                continue
+            max_content_width = max(max_content_width, get_display_width(line))
+        
+        # Calculate box width (content + "│ " + " │")
+        box_width = max_content_width + 4
+        
+        # Format all lines with proper box characters using display width for padding
+        formatted_lines = []
+        
+        # Top border
+        formatted_lines.append("╭" + "─" * (box_width - 2) + "╮")
+        
+        in_rationale = False
+        
+        for line in content_lines:
+            if line.startswith("HEADER:"):
+                # Format header with full border - must match exact box width
+                title = line[7:]  # Remove "HEADER:" prefix
+                title_width = get_display_width(title)
+                
+                # Total available space for the header line content (excluding ├─ and ┤)
+                # box_width includes the outer borders, so available space is box_width - 4
+                available_space = box_width - 4  # -4 for "├─" at start and "┤" at end
+                
+                # Space needed: "─ " (2) + title + " " + remaining "─" characters
+                title_and_spaces = 2 + title_width  # "─ " + title
+                remaining_dashes = available_space - title_and_spaces + 1  # +1 for perfect alignment!
+                
+                if remaining_dashes < 0:
+                    # Title too long, truncate
+                    max_title_space = available_space - 2  # Reserve space for "─ "
+                    truncated = ""
+                    current_width = 0
+                    for char in title:
+                        char_width = 2 if char in '🔧✅🟢📝💡⚠️🚫🦇' else 1
+                        if current_width + char_width + 3 > max_title_space:  # +3 for "..."
+                            break
+                        truncated += char
+                        current_width += char_width
+                    title = truncated + "..."
+                    title_width = get_display_width(title)
+                    title_and_spaces = 2 + title_width
+                    remaining_dashes = available_space - title_and_spaces + 1  # +1 for perfect alignment!
+                    if remaining_dashes < 0:
+                        remaining_dashes = 0
+                
+                header_line = f"├─ {title} {'─' * remaining_dashes}┤"
+                formatted_lines.append(header_line)
+                
+            elif line == "SEPARATOR":
+                # Add separator line
+                formatted_lines.append("│" + "─" * (box_width - 2) + "│")
+                
+            else:
+                # Regular content line (removed all rationale box handling)
+                line_width = get_display_width(line)
+                if line_width > MAX_TOTAL_LINE_LENGTH:
+                    # API line that exceeds limit - break out of box
+                    formatted_lines.append(line)
+                else:
+                    # Normal line with padding based on display width
+                    padding = max_content_width - line_width
+                    if padding < 0:
+                        padding = 0
+                    formatted_lines.append(f"│ {line}{' ' * padding} │")
+        
+        # Bottom border
+        formatted_lines.append("╰" + "─" * (box_width - 2) + "╯")
+        
+        return "\n".join(formatted_lines)
+
+
+
     def _wrap_text(self, text: str, width: int) -> List[str]:
         """Wrap text to specified width, preserving words"""
         import textwrap
