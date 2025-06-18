@@ -164,6 +164,7 @@ class Config:
                             "network_log_config",
                             "module_log_levels",
                             "terminal_log_max_line_length",
+                            "audio_import_batch_size",
                             "original_audio_chunk_size",
                             "original_audio_chunks_per_shard",
                             "aac_default_bitrate",
@@ -186,6 +187,7 @@ class Config:
     network_log_config: NetworkLogConfig|None = None  # Network logging configuration
     module_log_levels: Dict[str, LogLevel] = {}  # Module-specific log levels
     terminal_log_max_line_length: int|None = 120  # Maximum line length for terminal output (None = no wrapping)
+    audio_import_batch_size: int = 20  # Files per subprocess for batch operations
     original_audio_chunk_size = 1024 * 1024  # 1MB
     original_audio_chunks_per_shard = 4      # 4 chunks per shard
     aac_default_bitrate: int = 160000              # Default AAC bitrate in bits/second (160 kbps)
